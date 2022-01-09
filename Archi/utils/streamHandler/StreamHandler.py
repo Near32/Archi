@@ -6,6 +6,17 @@ class StreamHandler(object):
     def __init__(self):
         self.placeholders = {}
 
+        self.record_new_entries = False
+        self.new_placeholders = {}
+    
+    def start_recording_new_entries(self):
+        self.record_new_entries = True 
+        self.new_placeholders = {}
+
+    def stop_recording_new_entries(self):
+        self.record_new_entries = False
+        return self.new_placeholders
+
     def register(self, placeholder_id:str):
         self.update(placeholder_id=placeholder_id, stream_data={})
 
@@ -24,11 +35,14 @@ class StreamHandler(object):
         Hierarchically explores the placeholders and their streams.
 
         :params placeholder_id: string formatted with ':' between the name of the streaming module/placeholder and the name of the stream.
-        :param stream_data: data or dict of str and torch.Tensor/List to update the stream with.
-        :param p_ptr: None, except when called by self in a recurrent fashion.
+        :param stream_data:     data or dict of str and torch.Tensor/List to update the stream with.
+        :param p_ptr:           None, starting point of the hierarchical dictionnary to update. If None, then it is initialised internally to :attr placeholders:.
+                                Otherwise, it is supposed to be different from None when called by self to record new entries.
         '''
 
-        p_ptr = self.placeholders
+        if p_ptr is None:
+            p_ptr = self.placeholders
+        
         if stream_data is {}:   return
         
         previous_placeholder = {}
@@ -51,6 +65,14 @@ class StreamHandler(object):
         else:
             p_ptr[placeholder_id] = stream_data
         
+        if self.record_new_entries:
+            self.update(
+                placeholder_id=placeholder_id,
+                stream_data=stream_data,
+                p_ptr=self.new_placeholders,
+                reset=reset,
+            )
+
         return
 
     def serve(self, pipeline:List[object]):
