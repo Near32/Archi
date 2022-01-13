@@ -1,10 +1,14 @@
 from typing import Dict, List 
 
+import math 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from Archi.modules.module import Module 
+
+from Archi.modules.utils import layer_init
 
 
 class addXYfeatures(nn.Module) :
@@ -170,7 +174,7 @@ def coord4deconv( sin, sout,kernel_size,stride=2,padding=1,batchNorm=True,bias=F
     return nn.Sequential( *layers )
 
 
-class ConvolutionalBody(Module):
+class ConvolutionalNetworkModule(Module):
     def __init__(
         self, 
         input_shape, 
@@ -205,7 +209,7 @@ class ConvolutionalBody(Module):
                 after each convolutional layer.
         :param use_coordconv: None or Int specifying the type of coord convolutional layers to use, either 2 or 4.
         '''
-        super(ConvolutionalBody, self).__init__(
+        super(ConvolutionalNetworkModule, self).__init__(
             id=id,
             type="ConvolutionalNetworkModule",
             config=config,
@@ -214,7 +218,10 @@ class ConvolutionalBody(Module):
 
         original_conv_fn = nn.Conv2d
         if use_coordconv is not None:
-            if use_coordconv == 2: 
+            if isinstance(use_coordconv, bool)\
+            and use_coordconv:
+                original_conv_fn = coord4conv
+            elif use_coordconv == 2: 
                 original_conv_fn = coordconv
             elif use_coordconv == 4:
                 original_conv_fn = coord4conv
@@ -224,11 +231,17 @@ class ConvolutionalBody(Module):
         self.dropout = dropout
         self.non_linearities = non_linearities
         if not isinstance(non_linearities, list):
-            self.non_linearities = [non_linearities] * (len(channels) - 1)
-        else:
-            while len(self.non_linearities) <= (len(channels) - 1):
-                self.non_linearities.append(self.non_linearities[0])
-
+            self.non_linearities = [non_linearities]
+        while len(self.non_linearities) <= (len(channels) - 1):
+            self.non_linearities.append(self.non_linearities[0])
+        for idx, nl in enumerate(self.non_linearities):
+            if not isinstance(nl, str):
+                raise NotImplementedError
+            nl_cls = getattr(nn, nl, None)
+            if nl_cls is None:
+                raise NotImplementedError
+            self.non_linearities[idx] = nl_cls
+        
         self.feature_dim = feature_dim
         if not(isinstance(self.feature_dim, int)):
             self.feature_dim = feature_dim[-1]
@@ -392,7 +405,7 @@ class ConvolutionalBody(Module):
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.forward(experiences)
-            outputs_stream_dict[key] = features
+            outputs_stream_dict[f'processed_{key}'] = features
 
         return outputs_stream_dict 
 

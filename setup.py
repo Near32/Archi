@@ -29,19 +29,20 @@ setup(
     zip_safe=False,
 
     install_requires=[
-	'tqdm',
+	#'tqdm',
+        'pyyaml',
         'cloudpickle',
 	'numpy',
-	'scikit-image',
+	#'scikit-image',
         # previously: 'scikit-learn==0.23',
         # now:
-        'scikit-learn==1.0',
-	'opencv-python',
+        #'scikit-learn==1.0',
+	#'opencv-python',
 	'torch>=1.4',
 	'torchvision>=0.5.0',
-        'tensorboardX',
-	'matplotlib',
-	'docopt',
+        #'tensorboardX',
+	#'matplotlib',
+	#'docopt',
 	] + test_requirements,
 
     python_requires=">=3.6",

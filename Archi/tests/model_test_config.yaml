@@ -1,0 +1,32 @@
+modules:
+        FullyConnectedNetworkModule:
+                state_dim: 32
+                hidden_units: [32, 16]
+                non_linearities: ['ReLU']
+                dropout: 0.5
+                id: 'FCNModule_0'
+                config:
+                        test_entry: None
+                        test_entry2: None
+                input_stream_ids:
+                        input: "inputs:x"
+                use_cuda: True
+        ConvolutionalNetworkModule:
+                input_shape: [3, 32, 32]
+                feature_dim: 32
+                channels: [32, 32]
+                kernel_sizes: [3, 3]
+                strides: [2, 2]
+                paddings: [1, 1]
+                fc_hidden_units: [256, 128]
+                non_linearities: ['ReLU']
+                dropout: 0.5
+                use_coordconv: True
+                id: 'ConvNetModule_0'
+                config:
+                        test_entry: None
+                        test_entry2: None
+                input_stream_ids:
+                        input: "modules:FCNModule_0:processed_input"
+                use_cuda: True
+

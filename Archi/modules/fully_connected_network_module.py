@@ -1,10 +1,14 @@
 from typing import Dict, List 
 
+import math 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from Archi.modules.module import Module 
+
+from Archi.modules.utils import layer_init
 
 
 class FullyConnectedNetworkModule(Module):
@@ -20,7 +24,7 @@ class FullyConnectedNetworkModule(Module):
         use_cuda=False
     ):
 
-        super(FCBody, self).__init__(
+        super(FullyConnectedNetworkModule, self).__init__(
             id=id,
             type="FullyConnectedNetworkModule",
             config=config,
@@ -42,10 +46,16 @@ class FullyConnectedNetworkModule(Module):
 
         self.non_linearities = non_linearities
         if not isinstance(non_linearities, list):
-            self.non_linearities = [non_linearities] * (len(dims) - 1)
-        else:
-            while len(self.non_linearities) <= (len(dims) - 1):
-                self.non_linearities.append(self.non_linearities[0])
+            self.non_linearities = [non_linearities]
+        while len(self.non_linearities) <= (len(dims) - 1):
+            self.non_linearities.append(self.non_linearities[0])
+        for idx, nl in enumerate(self.non_linearities):
+            if not isinstance(nl, str):
+                raise NotImplementedError
+            nl_cls = getattr(nn, nl, None)
+            if nl_cls is None:
+                raise NotImplementedError
+            self.non_linearities[idx] = nl_cls
         
         self.layers = []
         in_ch = dims[0]
@@ -135,7 +145,7 @@ class FullyConnectedNetworkModule(Module):
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.layers(experiences)
-            outputs_stream_dict[key] = features
+            outputs_stream_dict[f'processed_{key}'] = features
 
         return outputs_stream_dict 
 
