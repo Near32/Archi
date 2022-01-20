@@ -1,3 +1,9 @@
+model_id: 'TestModel'
+
+input_stream_ids:
+        "inputs:x" : "observations:obs_x"
+        "inputs:y" : "infos:info_y"
+
 modules:
         FullyConnectedNetworkModule:
                 state_dim: 32
@@ -9,7 +15,7 @@ modules:
                         test_entry: None
                         test_entry2: None
                 input_stream_ids:
-                        input: "inputs:x"
+                        input: "modules:ConvNetModule_0:processed_input"
                 use_cuda: True
         ConvolutionalNetworkModule:
                 input_shape: [3, 32, 32]
@@ -27,6 +33,10 @@ modules:
                         test_entry: None
                         test_entry2: None
                 input_stream_ids:
-                        input: "modules:FCNModule_0:processed_input"
+                        input: "inputs:x"
                 use_cuda: True
+
+pipelines:
+        trunk: ['ConvNetModule_0']
+        head: ['FCNModule_0']
 

@@ -7,13 +7,14 @@ import torch
 import torch.nn as nn
 
 from Archi.utils import StreamHandler
-from Archi.modules import Module 
+from Archi.modules import Module, load_module 
+
+
 
 class Model(Module):
     def __init__(
         self,
         module_id: str="Model_0",
-        module_type: str="ModelModule",
         config: Dict[str,object]={},
         input_stream_ids: Dict[str,str]={},
     ):
@@ -25,9 +26,9 @@ class Model(Module):
             - 'save_path'   : str,
         
         """
-        super(Model, self).__inint__(
+        super(Model, self).__init__(
             id=module_id,
-            type=module_type,
+            type="ModelModule",
             config=config,
             input_stream_ids=input_stream_ids,
         )
@@ -71,5 +72,21 @@ class Model(Module):
         return new_streams_dict
 
 
+
+def load_model(config: Dict[str, object]) -> Model:
+    mcfg = {}
+    
+    mcfg['pipelines'] = config['pipelines']
+    mcfg['modules'] = {}
+    for mk, m_kwargs in config['modules'].items():
+        mcfg['modules'][m_kwargs['id']] = load_module(mk, m_kwargs)
+    
+    model = Model(
+        module_id = config['model_id'],
+        config=mcfg,
+        input_stream_ids=config['input_stream_ids'],
+    )
+
+    return model 
 
 
