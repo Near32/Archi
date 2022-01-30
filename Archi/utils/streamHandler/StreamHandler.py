@@ -40,13 +40,15 @@ class StreamHandler(object):
                                 Otherwise, it is supposed to be different from None when called by self to record new entries.
         '''
 
+        init_p_ptr = p_ptr
         if p_ptr is None:
             p_ptr = self.placeholders
         
         if stream_data is {}:   return
         
         previous_placeholder = {}
-
+        
+        init_placeholder_id = copy.deepcopy(placeholder_id)
         while ':' in placeholder_id:
             ptr, next_placeholder_id = placeholder_id.split(":", 1)
             if ptr not in p_ptr:    p_ptr[ptr] = {}
@@ -65,9 +67,10 @@ class StreamHandler(object):
         else:
             p_ptr[placeholder_id] = stream_data
         
-        if self.record_new_entries:
+        if self.record_new_entries \
+        and init_p_ptr != self.new_placeholders:
             self.update(
-                placeholder_id=placeholder_id,
+                placeholder_id=init_placeholder_id,
                 stream_data=stream_data,
                 p_ptr=self.new_placeholders,
                 reset=reset,

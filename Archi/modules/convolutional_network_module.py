@@ -221,6 +221,9 @@ class ConvolutionalNetworkModule(Module):
             if isinstance(use_coordconv, bool)\
             and use_coordconv:
                 original_conv_fn = coord4conv
+            elif isinstance(use_coordconv, bool)\
+            and not use_coordconv:
+                pass
             elif use_coordconv == 2: 
                 original_conv_fn = coordconv
             elif use_coordconv == 4:
@@ -245,11 +248,11 @@ class ConvolutionalNetworkModule(Module):
         self.feature_dim = feature_dim
         if not(isinstance(self.feature_dim, int)):
             self.feature_dim = feature_dim[-1]
-
+        
         self.cnn = []
         dim = input_shape[1] # height
-        in_ch = channels[0]
-        for idx, (cfg, k, s, p) in enumerate(zip(channels[1:], kernel_sizes, strides, paddings)):
+        in_ch = input_shape[0]
+        for idx, (cfg, k, s, p) in enumerate(zip(channels, kernel_sizes, strides, paddings)):
             conv_fn = original_conv_fn
             if isinstance(cfg, str) and cfg == 'MP':
                 if isinstance(k, str):
@@ -401,7 +404,7 @@ class ConvolutionalNetworkModule(Module):
         for key, experiences in input_streams_dict.items():
             batch_size = experiences.size(0)
 
-            experiences = experiences.view(batch_size, -1)
+            #experiences = experiences.view(batch_size, -1)
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.forward(experiences)

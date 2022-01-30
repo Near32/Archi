@@ -18,7 +18,7 @@ modules:
                         input: "modules:ConvNetModule_0:processed_input"
                 use_cuda: True
         ConvolutionalNetworkModule:
-                input_shape: [3, 32, 32]
+                input_shape: [3, 64, 64]
                 feature_dim: 32
                 channels: [32, 32]
                 kernel_sizes: [3, 3]
@@ -27,7 +27,7 @@ modules:
                 fc_hidden_units: [256, 128]
                 non_linearities: ['ReLU']
                 dropout: 0.5
-                use_coordconv: True
+                use_coordconv: False #True
                 id: 'ConvNetModule_0'
                 config:
                         test_entry: None
