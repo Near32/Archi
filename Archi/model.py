@@ -48,6 +48,13 @@ class Model(Module):
         # Register Modules:
         for k,m in self.config['modules'].items():
             self.stream_handler.update(f"modules:{m.get_id()}:ref", m)
+            if hasattr(m, 'get_reset_states'):
+                reset_dict = m.get_reset_states()
+                for ks, v in reset_dict.items():
+                    self.stream_handler.update(
+                        f"inputs:{m.get_id()}:{ks}",
+                        v,
+                    )
         self.modules = self.config['modules']
         
         # Register Pipelines:
@@ -79,7 +86,8 @@ def load_model(config: Dict[str, object]) -> Model:
     mcfg['pipelines'] = config['pipelines']
     mcfg['modules'] = {}
     for mk, m_kwargs in config['modules'].items():
-        mcfg['modules'][m_kwargs['id']] = load_module(mk, m_kwargs)
+        if 'id' not in m_kwargs:    m_kwargs['id'] = mk
+        mcfg['modules'][m_kwargs['id']] = load_module(m_kwargs.pop('type'), m_kwargs)
     
     model = Model(
         module_id = config['model_id'],

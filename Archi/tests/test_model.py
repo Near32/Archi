@@ -2,23 +2,6 @@ import Archi
 import yaml 
 
 
-def test_module_loading():
-    try:
-        config = yaml.safe_load(
-            open("./model_test_config.yaml", 'r'),
-        )
-    except yaml.YANNLError as e:
-        print(e)
-
-    from Archi.modules import load_module
-
-    modules = {}
-    for mk, m_kwargs in config['modules'].items():
-        modules[m_kwargs['id']] = load_module(mk, m_kwargs)
-    
-    assert 'FCNModule_0' in modules.keys()
-    assert 'test_entry' in modules['FCNModule_0'].config.keys()
-
 def test_model_loading():
     try:
         config = yaml.safe_load(
@@ -33,7 +16,11 @@ def test_model_loading():
     
     assert 'FCNModule_0' in model.modules.keys()
     assert 'test_entry' in model.modules['FCNModule_0'].config.keys()
-
+    assert 'CoreLSTM' in model.modules.keys()
+    assert 'CoreLSTM' in model.stream_handler.placeholders['inputs'].keys()
+    assert 'hidden' in model.stream_handler.placeholders['inputs']['CoreLSTM'].keys()
+    assert 'cell' in model.stream_handler.placeholders['inputs']['CoreLSTM'].keys()
+    
 def test_model_forward():
     try:
         config = yaml.safe_load(
@@ -57,7 +44,9 @@ def test_model_forward():
 
     assert 'processed_input' in output['modules']['ConvNetModule_0']
     assert 'processed_input' in output['modules']['FCNModule_0']
-
+    assert 'lstm_output' in output['modules']['CoreLSTM']
+    
 
 if __name__ == '__main__':
+    test_model_loading()
     test_model_forward()

@@ -5,7 +5,20 @@ input_stream_ids:
         "inputs:y" : "infos:info_y"
 
 modules:
-        FullyConnectedNetworkModule:
+        'CoreLSTM':
+                type: LSTMModule
+                state_dim: 16
+                hidden_units: [16, 16]
+                non_linearities: [None, 'ReLU']
+                config: None
+                input_stream_ids:
+                        lstm_input: "modules:FCNModule_0:processed_input"
+                        lstm_hidden: "inputs:CoreLSTM:hidden"
+                        #lstm_cell: "inputs:CoreLSTM:cell"
+                use_cuda: True
+
+        'FCNModule_0':
+                type: FullyConnectedNetworkModule
                 state_dim: 32
                 hidden_units: [32, 16]
                 non_linearities: ['ReLU']
@@ -17,7 +30,9 @@ modules:
                 input_stream_ids:
                         input: "modules:ConvNetModule_0:processed_input"
                 use_cuda: True
-        ConvolutionalNetworkModule:
+        
+        'ConvNetModule_0':
+                type: ConvolutionalNetworkModule
                 input_shape: [3, 64, 64]
                 feature_dim: 32
                 channels: [32, 32]
@@ -37,6 +52,6 @@ modules:
                 use_cuda: True
 
 pipelines:
-        trunk: ['ConvNetModule_0']
-        head: ['FCNModule_0']
+        trunk: ['ConvNetModule_0', 'FCNModule_0']
+        head: ['CoreLSTM']
 
