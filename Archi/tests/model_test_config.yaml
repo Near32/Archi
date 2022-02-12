@@ -5,6 +5,25 @@ input_stream_ids:
         "inputs:y" : "infos:info_y"
 
 modules:
+        'SecondaryDNC':
+                type: DNCModule
+                input_dim: 16
+                hidden_units: [512, 512]
+                non_linearities: [None, None]
+                output_dim: 32
+                mem_nbr_slots: 128
+                mem_dim: 32
+                nbr_read_heads: 2
+                #nbr_write_heads: 1
+                clip: 20.0
+                sparse_K: 0
+                simplified: True
+                discount_factor: 0.99
+                config: None
+                input_stream_ids:
+                        dnc_input: 'modules:CoreLSTM:lstm_output'
+                        #dnc_framestate: 'inputs:SecondaryDNC:dnc'
+                use_cuda: True
         'CoreLSTM':
                 type: LSTMModule
                 state_dim: 16
@@ -53,5 +72,5 @@ modules:
 
 pipelines:
         trunk: ['ConvNetModule_0', 'FCNModule_0']
-        head: ['CoreLSTM']
+        head: ['CoreLSTM', 'SecondaryDNC']
 

@@ -56,7 +56,9 @@ class Model(Module):
                         v,
                     )
         self.modules = self.config['modules']
-        
+        for km, vm in self.modules.items():
+            self.add_module(km, vm)
+
         # Register Pipelines:
         self.pipelines = self.config['pipelines']
 

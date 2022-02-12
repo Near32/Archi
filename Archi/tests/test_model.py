@@ -20,6 +20,12 @@ def test_model_loading():
     assert 'CoreLSTM' in model.stream_handler.placeholders['inputs'].keys()
     assert 'hidden' in model.stream_handler.placeholders['inputs']['CoreLSTM'].keys()
     assert 'cell' in model.stream_handler.placeholders['inputs']['CoreLSTM'].keys()
+    assert 'SecondaryDNC' in model.modules.keys()
+    assert 'SecondaryDNC' in model.stream_handler.placeholders['inputs'].keys()
+    assert 'dnc' in model.stream_handler.placeholders['inputs']['SecondaryDNC'].keys()
+    assert 'dnc_body' in model.stream_handler.placeholders['inputs']['SecondaryDNC']['dnc'].keys()
+    assert 'dnc_controller' in model.stream_handler.placeholders['inputs']['SecondaryDNC']['dnc'].keys()
+    assert 'dnc_memory' in model.stream_handler.placeholders['inputs']['SecondaryDNC']['dnc'].keys()
     
 def test_model_forward():
     try:
@@ -41,12 +47,16 @@ def test_model_forward():
     }
 
     output = model(**inputs_dict)
+    output1 = model(**inputs_dict)
 
     assert 'processed_input' in output['modules']['ConvNetModule_0']
     assert 'processed_input' in output['modules']['FCNModule_0']
     assert 'lstm_output' in output['modules']['CoreLSTM']
-    
+    assert 'dnc_output' in output['modules']['SecondaryDNC']
+    assert output1['inputs']['SecondaryDNC']['dnc']['dnc_body']['prev_read_vec'][0].max() != 0.0    
+    assert len(dict(model.named_parameters())) != 0
 
 if __name__ == '__main__':
     test_model_loading()
     test_model_forward()
+

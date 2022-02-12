@@ -457,6 +457,7 @@ class DNCController(LSTMModule):
         self, 
         input_dim=32, 
         hidden_units=[512], 
+        non_linearities=['None'],
         output_dim=32, 
         mem_nbr_slots=128, 
         mem_dim= 32, 
@@ -482,18 +483,18 @@ class DNCController(LSTMModule):
         super(DNCController, self).__init__(
             state_dim=LSTMinput_size, 
             hidden_units=hidden_units, 
-            non_linearities=[None],
+            non_linearities=non_linearities,
             id='DNCController_0',
             config=config,
             input_stream_ids=None,
             use_cuda=use_cuda,
+        )
         """
             state_dim=LSTMinput_size,
             hidden_units=hidden_units,
             gate=None,
             extra_inputs_infos=extra_inputs_infos,
         """
-        )
 
         self.input_dim = input_dim
         self.hidden_units = hidden_units
@@ -550,7 +551,7 @@ class DNCController(LSTMModule):
         # of the frame_state, otherwise any changes 
         # will be repercuted onto the current frame_state
         x, frame_states = inputs[0], copy_hdict(inputs[1])
-        
+
         recurrent_neurons = extract_subtree(
             in_dict=frame_states,
             node_id='lstm',
@@ -609,8 +610,8 @@ class DNCController(LSTMModule):
             next_cstates.append(outputs[-1][1])
             
             # Consider not applying activation functions on last layer's output?
-            if self.gate is not None:
-                x = self.gate(outputs[-1][0])
+            if self.non_linearities[idx] is not None:
+                x = self.non_linearities[idx](outputs[-1][0])
             else:
                 x = outputs[-1][0]
         
@@ -759,11 +760,12 @@ class DNCMemory(nn.Module) :
         return reading
         
 
-class DNCModule(nn.Module) :
+class DNCModule(Module) :
     def __init__(
         self,
         input_dim=32, 
-        hidden_units=512, 
+        hidden_units=[512], 
+        non_linearities=['None'],
         output_dim=32, 
         mem_nbr_slots=128, 
         mem_dim= 32, 
@@ -772,6 +774,7 @@ class DNCModule(nn.Module) :
         clip=20,
         sparse_K=0,
         simplified=False,
+        #TODO: simplified_nbr_similar_entries_to_read=4,
         discount_factor:float=0.99,
         config:Dict[str,object] = {},
         id:str = 'DNCModule_0',
@@ -784,6 +787,11 @@ class DNCModule(nn.Module) :
             of the DNC proposed in Wayne et al., 2018 (https://arxiv.org/pdf/1803.10760.pdf),
             and re-used in Hill et al., 2020 (https://arxiv.org/pdf/2009.01719.pdf).
         """
+        
+        assert 'dnc_input' in input_stream_ids
+        if 'dnc_framestate' not in input_stream_ids:
+            input_stream_ids['dnc_framestate'] = f"inputs:{id}:dnc"
+        
         super(DNCModule,self).__init__(
             id=id,
             type="DNCModule",
@@ -794,6 +802,7 @@ class DNCModule(nn.Module) :
         self.input_dim = input_dim
         self.hidden_units = hidden_units
         self.hidden_dim = hidden_units[-1]
+        self.non_linearities = non_linearities
         self.output_dim = output_dim
         self.use_cuda = use_cuda
         #self.extra_inputs_infos = extra_inputs_infos
@@ -805,7 +814,7 @@ class DNCModule(nn.Module) :
         if self.simplified: self.mem_dim *= 2
         self.discount_factor = discount_factor 
 
-        assert nbr_write_heads==1
+        assert nbr_write_heads==1, "Only 1 write head implementation provided."
         self.nbr_read_heads = nbr_read_heads
         self.nbr_write_heads = nbr_write_heads
         
@@ -832,6 +841,7 @@ class DNCModule(nn.Module) :
             # taking into account the previously read vec:
             input_dim=self.input_dim+self.mem_dim*self.nbr_read_heads, 
             hidden_units=self.hidden_units, 
+            non_linearities=self.non_linearities,
             output_dim=self.output_dim, 
             mem_nbr_slots=self.mem_nbr_slots, 
             mem_dim=self.mem_dim, 
@@ -936,11 +946,28 @@ class DNCModule(nn.Module) :
         return {'dnc':hdict}
 
     def forward(self, inputs):
-        # DNC_input :
-        # 'input' : batch_dim x seq_len x self.input_dim
-        # 'prev_desired_output' : batch_dim x seq_len x self.output_dim
-        # 'prev_read_vec' : batch_dim x seq_len x self.nbr_read_head * self.mem_dim
+        """
+        :param inputs: Tuple containing the controller input x, and DNC_input dictionary framestate.
+        DNC_input dictionary :
+            'dnc':
+                'dnc_body':
+                    'prev_read_vec': batch_dim x self.nbr_read_head * self.mem_dim
+                    'prev_usage_vector': batch_dim x self.mem_nbr_slots
+                    'prev_write_weights': batch_dim x self.nbr_write_head x self.mem_dim
+                    'prev_timestep': batch_dim x 1 x 1, if simplified
+                    'prev_ret_write_weights': batch_dim x self.nbr_write_heads x self.mem_dim, if simplified.
+                    'prev_read_weights': batch_dim x self.nbr_read_heads x self.mem_dim, if not simplified.
+                    'prev_link_matrix': batch_dim x self.mem_nbr_slots, self.mem_nbr_slots, if not simplified.
+                    'prev_precedence_weights': batch_dim x 1 x self.mem_nbr_slots, if not simplified.
+                'dnc_controller':
+                    'lstm':
+                        'hidden': batch_dim x hidden_units.
+                        'cell' : batch_dim x hidden_units.
+                'dnc_memory':
+                    'memory': batch_dim x self.nbr_mem_slots x self.mem_dim
+        """
         #x['prev_read_vec'] = self.read_outputs[-1]
+        
         # Taking into account the previously read vector as a state:
         x, frame_states = inputs[0], copy_hdict(inputs[1])
         batch_size = x.shape[0]
@@ -949,6 +976,12 @@ class DNCModule(nn.Module) :
             in_dict=frame_states,
             node_id='dnc',
         )
+
+        if dnc_state_dict['dnc_body']['prev_read_vec'][0].shape[0] == 1: 
+            # then we have just resetted the values, we need to properly reset those:
+            dnc_state_dict = self.get_reset_states(cuda=self.use_cuda, repeat=batch_size)['dnc']
+        elif dnc_state_dict['dnc_body']['prev_read_vec'][0].shape[0] != batch_size:
+                raise NotImplementedError("Sizes of the framestate elements and the inputs do not coincide.")
 
         prev_read_vec = dnc_state_dict['dnc_body']['prev_read_vec'][0]
         prev_read_vec = prev_read_vec.to(x.dtype).to(x.device)
@@ -1056,8 +1089,7 @@ class DNCModule(nn.Module) :
             slots_read=read_vec,
         )
 
-        if not self.simplified:
-            dnc_state_dict['dnc_body']['prev_read_vec'] = [read_vec.reshape(batch_size, -1)]
+        dnc_state_dict['dnc_body']['prev_read_vec'] = [read_vec.reshape(batch_size, -1)]
         
         if self.sparse_K!=0:
             written_memory_state = asp(written_memory_state, K=self.sparse_K)
@@ -1084,26 +1116,19 @@ class DNCModule(nn.Module) :
         """
         outputs_stream_dict = {}
         
-        lstm_input = input_streams_dict['lstm_input']
-        lstm_hidden = input_streams_dict['lstm_hidden']
-        lstm_cell = input_streams_dict['lstm_cell']
+        dnc_input = input_streams_dict['dnc_input']
+        dnc_framestate = input_streams_dict['dnc_framestate']
 
-        lstm_output, state_dict = self.forward((
-            lstm_input,
-            {
-                'hidden': lstm_hidden,
-                'cell': lstm_cell,
-            }),
-        )
+        dnc_output, framestate_dict = self.forward((
+            dnc_input,
+            {'dnc':dnc_framestate},
+        ))
         
-        outputs_stream_dict[f'lstm_output'] = lstm_output
-        
-        outputs_stream_dict[f'lstm_hidden'] = state_dict['hidden']
-        outputs_stream_dict[f'lstm_cell'] = state_dict['cell']
+        outputs_stream_dict[f'dnc_output'] = dnc_output
+        outputs_stream_dict['dnc_framestate'] = framestate_dict['dnc']
         
         # Bookkeeping:
-        outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
-        outputs_stream_dict[f'inputs:{self.id}:cell'] = state_dict['cell']
+        outputs_stream_dict[f'inputs:{self.id}:dnc'] = framestate_dict['dnc']
         
         return outputs_stream_dict 
 

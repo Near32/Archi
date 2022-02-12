@@ -13,7 +13,7 @@ class LSTMModule(Module):
         self, 
         state_dim, 
         hidden_units=[256], 
-        non_linearities=[None],
+        non_linearities=['None'],
         id='LSTMModule_0',
         config=None,
         input_stream_ids=None,
@@ -27,11 +27,12 @@ class LSTMModule(Module):
 
         '''
         
-        assert 'lstm_input' in input_stream_ids
-        if 'lstm_hidden' not in input_stream_ids:
-            input_stream_ids['lstm_hidden'] = f"inputs:{id}:hidden"
-        if 'lstm_cell' not in input_stream_ids:
-            input_stream_ids['lstm_cell'] = f"inputs:{id}:hidden"
+        #assert 'lstm_input' in input_stream_ids
+        if input_stream_ids is not None:
+            if 'lstm_hidden' not in input_stream_ids:
+                input_stream_ids['lstm_hidden'] = f"inputs:{id}:hidden"
+            if 'lstm_cell' not in input_stream_ids:
+                input_stream_ids['lstm_cell'] = f"inputs:{id}:hidden"
 
 
         super(LSTMModule, self).__init__(
@@ -163,7 +164,7 @@ class GRUModule(Module):
         self, 
         state_dim, 
         hidden_units=[256], 
-        non_linearities=[None],
+        non_linearities=['None'],
         id='GRUModule_0',
         config=None,
         input_stream_ids=None,
@@ -177,8 +178,9 @@ class GRUModule(Module):
 
         '''
         
-        assert 'gru_input' in input_stream_ids
-        if 'gru_hidden' not in input_stream_ids:
+        #assert 'gru_input' in input_stream_ids
+        if input_stream_ids is not None \
+        and 'gru_hidden' not in input_stream_ids:
             input_stream_ids['gru_hidden'] = f"inputs:{id}:hidden"
 
         super(GRUModule, self).__init__(
