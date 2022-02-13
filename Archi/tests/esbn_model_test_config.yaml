@@ -1,0 +1,90 @@
+model_id: 'ESBNModel'
+
+hyperparameters:
+        value_dim: 64
+        key_dim: 64
+        hidden_dim: 512
+        output_dim: 8
+
+input_stream_ids:
+        "inputs:x" : "observations:obs_x"
+
+modules:
+        'CoreLSTM':
+                type: LSTMModule
+                state_dim: "{{key_dim}}"
+                hidden_units: ["{{hidden_dim}}"]
+                non_linearities: [None]
+                config: None
+                input_stream_ids:
+                        lstm_input: "modules:KeyValueMemory:read_key"
+                        lstm_hidden: "inputs:CoreLSTM:hidden"
+                        #lstm_cell: "inputs:CoreLSTM:cell"
+                use_cuda: True
+        
+        'KeyValueMemory':
+                type: KeyValueMemoryModule
+                key_dim: "{{key_dim}}"
+                value_dim: "{{value_dim}}"
+                config: None
+                input_stream_ids:
+                        new_key: "modules:ToKeyFCN:processed_input"
+                        new_value: "modules:Encoder:processed_input"
+                        gate: "modules:ToGateFCN:processed_input"
+                        key_memory: "inputs:KeyValueMemory:key_memory"
+                        value_memory: "inputs:KeyValueMemory:value_memory"
+
+        'ToGateFCN':
+                type: FullyConnectedNetworkModule
+                state_dim: "{{hidden_dim}}"
+                hidden_units: [1]
+                non_linearities: [None]
+                dropout: 0.0
+                config: None
+                input_stream_ids:
+                        input: "modules:CoreLSTM:hidden"
+                use_cuda: True
+       
+        'ToKeyFCN':
+                type: FullyConnectedNetworkModule
+                state_dim: "{{hidden_dim}}"
+                hidden_units: ["{{key_dim}}"]
+                non_linearities: [None]
+                dropout: 0.0
+                config: None
+                input_stream_ids:
+                        input: "modules:CoreLSTM:hidden"
+                use_cuda: True
+        
+        'ToOutputFCN':
+                type: FullyConnectedNetworkModule
+                state_dim: "{{hidden_dim}}"
+                hidden_units: ["{{output_dim}}"]
+                non_linearities: [None]
+                dropout: 0.0
+                config: None
+                input_stream_ids:
+                        input: "modules:CoreLSTM:hidden"
+                use_cuda: True
+        
+        'Encoder':
+                type: ConvolutionalNetworkModule
+                input_shape: [3, 64, 64]
+                feature_dim: "{{value_dim}}"
+                channels: [32, 32]
+                kernel_sizes: [3, 3]
+                strides: [2, 2]
+                paddings: [1, 1]
+                fc_hidden_units: [256, 128]
+                non_linearities: ['ReLU']
+                dropout: 0.5
+                use_coordconv: False #True
+                config: None
+                input_stream_ids:
+                        input: "inputs:x"
+                use_cuda: True
+
+pipelines:
+        trunk: ['Encoder',]
+        head: ['CoreLSTM', 'ToGateFCN', 'ToKeyFCN', 'ToOutputFCN', 'KeyValueMemory']
+
