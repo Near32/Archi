@@ -32,7 +32,9 @@ class LSTMModule(Module):
             if 'lstm_hidden' not in input_stream_ids:
                 input_stream_ids['lstm_hidden'] = f"inputs:{id}:hidden"
             if 'lstm_cell' not in input_stream_ids:
-                input_stream_ids['lstm_cell'] = f"inputs:{id}:hidden"
+                input_stream_ids['lstm_cell'] = f"inputs:{id}:cell"
+            if 'iteration' not in input_stream_ids:
+                input_stream_ids['iteration'] = f"inputs:{id}:iteration"
 
 
         super(LSTMModule, self).__init__(
@@ -84,6 +86,11 @@ class LSTMModule(Module):
         '''
         x, recurrent_neurons = inputs
         hidden_states, cell_states = recurrent_neurons['hidden'], recurrent_neurons['cell']
+        iteration = recurrent_neurons.get("iteration", None)
+        if iteration is None:
+            batch_size = x.shape[0]
+            iteration = torch.zeros((batch_size, 1)).to(x.device)
+        niteration = [it+1 for it in iteration]
 
         next_hstates, next_cstates = [], []
         for idx, (layer, hx, cx) in enumerate(zip(self.layers, hidden_states, cell_states) ):
@@ -104,9 +111,10 @@ class LSTMModule(Module):
             next_cstates.append(ncx)
             # Consider not applying activation functions on last layer's output
             if self.non_linearities[idx] is not None:
-                x = self.non_linearities[idx](nhx)
+                nhx = self.non_linearities[idx](nhx)
+            x = nhx
 
-        return x, {'hidden': next_hstates, 'cell': next_cstates}
+        return nhx, {'hidden': next_hstates, 'cell': next_cstates, 'iteration': niteration}
     
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
         """
@@ -125,12 +133,14 @@ class LSTMModule(Module):
         lstm_input = input_streams_dict['lstm_input']
         lstm_hidden = input_streams_dict['lstm_hidden']
         lstm_cell = input_streams_dict['lstm_cell']
-
+        iteration = input_streams_dict['iteration']
+        
         lstm_output, state_dict = self.forward((
-            lstm_input,
+            lstm_input if not isinstance(lstm_input, list) else lstm_input[0],
             {
                 'hidden': lstm_hidden,
                 'cell': lstm_cell,
+                'iteration': iteration,
             }),
         )
         
@@ -138,10 +148,12 @@ class LSTMModule(Module):
         
         outputs_stream_dict[f'lstm_hidden'] = state_dict['hidden']
         outputs_stream_dict[f'lstm_cell'] = state_dict['cell']
+        outputs_stream_dict[f'iteration'] = state_dict['iteration']
         
         # Bookkeeping:
         outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
         outputs_stream_dict[f'inputs:{self.id}:cell'] = state_dict['cell']
+        outputs_stream_dict[f'inputs:{self.id}:iteration'] = state_dict['iteration']
         
         return outputs_stream_dict 
 
@@ -153,7 +165,10 @@ class LSTMModule(Module):
                 h = h.cuda()
             hidden_states.append(h)
             cell_states.append(h)
-        return {'hidden': hidden_states, 'cell': cell_states}
+        iteration = torch.zeros((repeat, 1))
+        if cuda:    iteration = iteration.cuda()
+        iteration = [iteration]
+        return {'hidden': hidden_states, 'cell': cell_states, 'iteration': iteration}
 
     def get_feature_shape(self):
         return self.feature_dim
@@ -179,9 +194,12 @@ class GRUModule(Module):
         '''
         
         #assert 'gru_input' in input_stream_ids
-        if input_stream_ids is not None \
-        and 'gru_hidden' not in input_stream_ids:
-            input_stream_ids['gru_hidden'] = f"inputs:{id}:hidden"
+        if input_stream_ids is not None:
+            if 'gru_hidden' not in input_stream_ids:
+                input_stream_ids['gru_hidden'] = f"inputs:{id}:hidden"
+            if 'iteration' not in input_stream_ids:
+                input_stream_ids['iteration'] = f"inputs:{id}:iteration"
+
 
         super(GRUModule, self).__init__(
             id=id,
@@ -221,6 +239,12 @@ class GRUModule(Module):
         '''
         x, recurrent_neurons = inputs
         hidden_states = recurrent_neurons['hidden']
+        
+        iteration = recurrent_neurons.get("iteration", None)
+        if iteration is None:
+            batch_size = x.shape[0]
+            iteration = torch.zeros((batch_size, 1)).to(x.device)
+        niteration = [it+1 for it in iteration]
 
         next_hstates = []
         for idx, (layer, hx) in enumerate(zip(self.layers, hidden_states) ):
@@ -238,9 +262,9 @@ class GRUModule(Module):
             next_hstates.append(nhx)
             # Consider not applying activation functions on last layer's output
             if self.non_linearities[idx] is not None:
-                x = self.non_linearities[idx](nhx)
-
-        return x, {'hidden': next_hstates}
+                nhx = self.non_linearities[idx](nhx)
+            x = nhx
+        return nhx, {'hidden': next_hstatesi, 'iteration': niteration}
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
         """
@@ -258,21 +282,25 @@ class GRUModule(Module):
         
         gru_input = input_streams_dict['gru_input']
         gru_hidden = input_streams_dict['gru_hidden']
+        iteration = input_streams_dict['iteration']
 
         gru_output, state_dict = self.forward((
-            gru_input,
+            gru_input if not isinstance(gru_input, list) else gru_input[0],
             {
                 'hidden': gru_hidden,
+                'iteration': iteration,
             }),
         )
         
         outputs_stream_dict[f'gru_output'] = gru_output
         
         outputs_stream_dict[f'gru_hidden'] = state_dict['hidden']
-        
+        outputs_stream_dict[f'iteration'] = state_dict['iteration']
+
         # Bookkeeping:
         outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
-        
+        outputs_stream_dict[f'inputs:{self.id}:iteration'] = state_dict['iteration']
+
         return outputs_stream_dict 
 
     def get_reset_states(self, cuda=False, repeat=1):
@@ -282,7 +310,10 @@ class GRUModule(Module):
             if cuda:
                 h = h.cuda()
             hidden_states.append(h)
-        return {'hidden': hidden_states}
+        iteration = torch.zeros((repeat, 1))
+        if cuda:    iteration = iteration.cuda()
+        iteration = [iteration]
+        return {'hidden': hidden_states, 'iteration': iteration}
 
     def get_feature_shape(self):
         return self.feature_dim

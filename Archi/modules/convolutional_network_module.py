@@ -409,7 +409,7 @@ class ConvolutionalNetworkModule(Module):
 
             features = self.forward(experiences)
             outputs_stream_dict[f'processed_{key}'] = features
-
+            
         return outputs_stream_dict 
 
     def get_feature_shape(self):

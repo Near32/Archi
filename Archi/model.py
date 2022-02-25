@@ -48,25 +48,34 @@ class Model(Module):
         # Register Modules:
         for k,m in self.config['modules'].items():
             self.stream_handler.update(f"modules:{m.get_id()}:ref", m)
-            if hasattr(m, 'get_reset_states'):
-                reset_dict = m.get_reset_states()
-                for ks, v in reset_dict.items():
-                    self.stream_handler.update(
-                        f"inputs:{m.get_id()}:{ks}",
-                        v,
-                    )
+        
         self.modules = self.config['modules']
         for km, vm in self.modules.items():
             self.add_module(km, vm)
 
         # Register Pipelines:
         self.pipelines = self.config['pipelines']
+        
+        # Reset States:
+        self.reset_states()
+
+    def reset_states(self, batch_size=1, cuda=False):
+        self.batch_size = batch_size
+        for k,m in self.config['modules'].items():
+            if hasattr(m, 'get_reset_states'):
+                reset_dict = m.get_reset_states(repeat=batch_size, cuda=cuda)
+                for ks, v in reset_dict.items():
+                    self.stream_handler.update(f"inputs:{m.get_id()}:{ks}",v)
+        return 
 
     def forward(self, **kwargs):
-        
+        batch_size = 1
         for k,v in kwargs.items():
+            batch_size = v.shape[0]
             self.stream_handler.update(f"inputs:{k}", v)
-        
+        if self.batch_size != batch_size: 
+            self.reset_states(batch_size=batch_size)
+
         self.stream_handler.reset("logs_dict")
         self.stream_handler.reset("losses_dict")
         self.stream_handler.reset("signals")

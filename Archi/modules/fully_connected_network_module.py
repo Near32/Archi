@@ -50,11 +50,14 @@ class FullyConnectedNetworkModule(Module):
         while len(self.non_linearities) <= (len(dims) - 1):
             self.non_linearities.append(self.non_linearities[0])
         for idx, nl in enumerate(self.non_linearities):
-            if not isinstance(nl, str):
-                raise NotImplementedError
-            nl_cls = getattr(nn, nl, None)
-            if nl_cls is None:
-                raise NotImplementedError
+            if nl=='None':
+                nl_cls = None
+            elif isinstance(nl, str):
+                nl_cls = getattr(nn, nl, None)
+                if nl_cls is None:
+                    raise NotImplementedError
+            else:
+                nl_cls = nl
             self.non_linearities[idx] = nl_cls
         
         self.layers = []
@@ -110,7 +113,8 @@ class FullyConnectedNetworkModule(Module):
                 self.layers.append(nn.LayerNorm(in_ch))
             if add_dp:
                 self.layers.append(nn.Dropout(p=dropout))
-            if add_non_lin:
+            if add_non_lin \
+            and self.non_linearities[idx] is not None:
                 self.layers.append(self.non_linearities[idx]())
         self.layers = nn.Sequential(*self.layers)
 

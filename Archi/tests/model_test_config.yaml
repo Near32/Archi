@@ -34,6 +34,7 @@ modules:
                         lstm_input: "modules:FCNModule_0:processed_input"
                         lstm_hidden: "inputs:CoreLSTM:hidden"
                         #lstm_cell: "inputs:CoreLSTM:cell"
+                        #iteration: "inputs:CoreLSTM:iteration"
                 use_cuda: True
 
         'FCNModule_0':
