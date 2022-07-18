@@ -9,10 +9,6 @@ import torch.nn as nn
 from Archi.utils import StreamHandler
 from Archi.modules import Module, load_module 
 
-"""
-TODO:
-- implement cuda method so that it can behave like an nn.Module in that regard.
-"""
 
 class Model(Module):
     def __init__(
