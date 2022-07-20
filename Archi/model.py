@@ -67,7 +67,7 @@ class Model(Module):
                     self.stream_handler.update(f"inputs:{m.get_id()}:{ks}",v)
         return 
 
-    def forward(self, **kwargs):
+    def _forward(self, **kwargs):
         batch_size = 1
         for k,v in kwargs.items():
             batch_size = v.shape[0]
@@ -85,14 +85,52 @@ class Model(Module):
             self.stream_handler.serve(pipeline)
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
+	
+	# Output mapping:
+	for k,v in self.config['output_mappings'].items():
+	   new_streams_dict[f"outputs:{k}"] = self.stream_handler[v]
+	import ipdb; ipdb.set_trace()
+	# verify that all output mappings are correct...
 
         return new_streams_dict
 
+    def forward(self, obs, action=None, rnn_states=None, goal=None):
+        assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
+	batch_size = obs.shape[0]
+
+	output_stream_dict = self._forward(
+	    obs=obs,
+	    frame_state=rnn_states,
+	)
+        
+	entropy = output_stream_dict["outputs:entropy"]
+	qa = ooutput_stream_dict["outputs:qa"]
+	legal_log_provs = output_stream_dict["outputs:log_a"]
+
+	# TODO: verify that new frame state is compatible with all the new streams:
+	next_rnn_states = output_stream_dict#["outputs:next_frame_state"]
+	# Maybe it is necessary to map them back to original key-values ?
+	import ipdb; ipdb.set_trace()
+
+        prediction = {
+            'a': action,
+            'ent': entropy,
+            'qa': qa,
+            'log_a': legal_log_probs,
+        }
+        
+        prediction.update({
+            'rnn_states': rnn_states,
+            'next_rnn_states': next_rnn_states
+        })
+
+        return prediction
 
 
 def load_model(config: Dict[str, object]) -> Model:
     mcfg = {}
     
+    mcfg['output_mappings'] = config.get("output_mappings", {}) 
     mcfg['pipelines'] = config['pipelines']
     mcfg['modules'] = {}
     for mk, m_kwargs in config['modules'].items():
