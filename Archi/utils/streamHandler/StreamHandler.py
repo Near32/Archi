@@ -9,6 +9,9 @@ class StreamHandler(object):
         self.record_new_entries = False
         self.new_placeholders = {}
     
+    def get_data(self):
+        return self.placeholders
+
     def start_recording_new_entries(self):
         self.record_new_entries = True 
         self.new_placeholders = {}

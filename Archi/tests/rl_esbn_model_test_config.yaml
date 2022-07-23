@@ -5,11 +5,11 @@ hyperparameters:
         key_dim: 64
         hidden_dim: 512
         output_dim: 256
-	action_dim: 8
+        action_dim: 8
 
 input_stream_ids:
         "inputs:obs" : "observations:obs"
-	"inputs:legal_actions" : "frame_states:legal_actions"
+        "inputs:legal_actions" : "frame_states:legal_actions"
 
 modules:
         'CoreLSTM':
@@ -88,25 +88,25 @@ modules:
                 input_stream_ids:
                         input: "inputs:obs"
                 use_cuda: True
-	
-	'RLHead':
-		type: RLCategoricalHeadModule
-		state_dim: 256 #"{{output_dim}}"
-		action_dim: 8 #"{{action_dim}}"
-		noisy: False
-		dueling: True
-		config: None
-		input_stream_ids: 
-			input0: "modules:ToOutputFCN:processed_lstm_output"
-			input1: "modules:ToOutputFCN:processed_lstm_output"
-			legal_actions: "inputs:legal_actions"
-		use_cuda: True
+        
+        'RLHead':
+                type: RLCategoricalHeadModule
+                state_dim: 512 #"{{2*output_dim}}"
+                action_dim: 8 #"{{action_dim}}"
+                noisy: False
+                dueling: True
+                config: None
+                input_stream_ids: 
+                        input0: "modules:ToOutputFCN:processed_input"
+                        input1: "modules:ToOutputFCN:processed_input"
+                        action: "inputs:action"
+                        legal_actions: "inputs:legal_actions"
+                use_cuda: True
 
 output_mappings:
-	"entropy" : "modules:RLHead:entropy"
-	"qa" : "modules:RLHead:qa"
-	"log_a" : "modules:RLHead:log_a"
-	"next_frame_state" : "modules:RLHead:next_frame_state"
+        "ent" : "modules:RLHead:ent"
+        "qa" : "modules:RLHead:qa"
+        "log_a" : "modules:RLHead:log_a"
 
 pipelines:
         trunk: ['Encoder',]

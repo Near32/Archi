@@ -8,6 +8,7 @@ import torch.nn as nn
 
 from Archi.utils import StreamHandler
 from Archi.modules import Module, load_module 
+from Archi.modules.utils import copy_hdict
 
 
 class Model(Module):
@@ -70,7 +71,9 @@ class Model(Module):
     def _forward(self, **kwargs):
         batch_size = 1
         for k,v in kwargs.items():
-            batch_size = v.shape[0]
+            if batch_size == 1\
+            and v is not None:
+                batch_size = v.shape[0]
             self.stream_handler.update(f"inputs:{k}", v)
         if self.batch_size != batch_size: 
             self.reset_states(batch_size=batch_size)
@@ -85,39 +88,38 @@ class Model(Module):
             self.stream_handler.serve(pipeline)
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
-	
+        self.data_dict = {'inputs':copy_hdict(self.stream_handler.get_data()['inputs'])}
+
 	# Output mapping:
-	for k,v in self.config['output_mappings'].items():
-	   new_streams_dict[f"outputs:{k}"] = self.stream_handler[v]
-	import ipdb; ipdb.set_trace()
-	# verify that all output mappings are correct...
+        for k,v in self.config['output_mappings'].items():
+            new_streams_dict[f"outputs:{k}"] = self.stream_handler[v]
 
         return new_streams_dict
 
     def forward(self, obs, action=None, rnn_states=None, goal=None):
         assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
-	batch_size = obs.shape[0]
-
-	output_stream_dict = self._forward(
+        batch_size = obs.shape[0]
+        
+        self.output_stream_dict = self._forward(
 	    obs=obs,
-	    frame_state=rnn_states,
+            action=action,
+	    **rnn_states,
 	)
         
-	entropy = output_stream_dict["outputs:entropy"]
-	qa = ooutput_stream_dict["outputs:qa"]
-	legal_log_provs = output_stream_dict["outputs:log_a"]
-
-	# TODO: verify that new frame state is compatible with all the new streams:
-	next_rnn_states = output_stream_dict#["outputs:next_frame_state"]
-	# Maybe it is necessary to map them back to original key-values ?
-	import ipdb; ipdb.set_trace()
-
+        entropy = self.output_stream_dict["outputs:ent"]
+        qa = self.output_stream_dict["outputs:qa"]
+        legal_log_probs = self.output_stream_dict["outputs:log_a"]
+        
         prediction = {
             'a': action,
             'ent': entropy,
             'qa': qa,
             'log_a': legal_log_probs,
         }
+        
+        next_rnn_states = {}
+        for k in rnn_states.keys():
+            next_rnn_states[k] = self.data_dict["inputs"][k]
         
         prediction.update({
             'rnn_states': rnn_states,

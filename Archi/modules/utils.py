@@ -90,7 +90,10 @@ def recursive_inplace_update(
             # RATHER, to generate copies that lets gradient flow but do not share
             # the same data space (i.e. modifying one will leave the other intact), make
             # sure to use the clone() method, as list comprehension does not create new tensors.
-            listvalue = [value.clone() for value in extra_dict[leaf_key]]
+            listvalue = [
+                    value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value) 
+                    for value in extra_dict[leaf_key]
+            ]
             in_dict[leaf_key] = listvalue
         return 
 
@@ -114,13 +117,21 @@ def recursive_inplace_update(
                 # RATHER, to generate copies that lets gradient flow but do not share
                 # the same data space (i.e. modifying one will leave the other intact), make
                 # sure to use the clone() method, as list comprehension does not create new tensors.
-                listvalue = [value.clone() for value in extra_dict[node_key][leaf_key]]
-                if batch_mask_indices is None or batch_mask_indices==[]:
+                listvalue = [
+                        value.clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value) 
+                        for value in extra_dict[node_key][leaf_key]
+                ]
+                #listvalue = [value.clone() for value in extra_dict[node_key][leaf_key]]
+                if batch_mask_indices is None\
+                or batch_mask_indices==[]:
                     in_dict[node_key][leaf_key]= listvalue
                 else:
                     for vidx in range(len(in_dict[node_key][leaf_key])):
                         v = listvalue[vidx]
                         if leaf_key not in in_dict[node_key]:   continue
+                        if not isinstance(v, torch.Tensor): 
+                            in_dict[node_key][leaf_key][vidx] = v
+                            continue
                         new_v = v[batch_mask_indices, ...].clone()
                         if preprocess_fn is not None:   new_v = preprocess_fn(new_v)
                         in_dict[node_key][leaf_key][vidx][batch_mask_indices, ...] = new_v

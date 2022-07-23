@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from Archi.modules.module import Module 
 from Archi.modules.utils import layer_init
 
-from Regym.rl_algorithms.networks import DuelingLayer, NoisyLayer
+from regym.rl_algorithms.networks import DuelingLayer, NoisyLinear, EPS
 
 
 class RLCategoricalHeadModule(Module):
@@ -61,11 +61,10 @@ class RLCategoricalHeadModule(Module):
         self.apply(reset_noisy_layer)
 
     def forward(self, phi_features):
-        batch_size = obs.shape[0]
         qa = self.fc_critic(phi_features)     
         # batch x action_dim
-	return qa
-
+        return qa
+    
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
         """
         Operates on inputs_dict that is made up of referents to the available stream.
@@ -81,20 +80,25 @@ class RLCategoricalHeadModule(Module):
         outputs_stream_dict = {}
 
         phi_features_list = [v for k,v in input_streams_dict.items() if 'input' in k]
-	phi_features = torch.cat(phi_features_list, dim=-1)
-
+        phi_features = torch.cat(phi_features_list, dim=-1)
+        
         if self.use_cuda:   phi_features = phi_features.cuda()
-
+        
         qa = self.forward(phi_features)
-
+        
         legal_actions = torch.ones_like(qa)
         if 'legal_actions' in input_streams_dict: 
-            legal_actions = input_streams_dict['legal_actions'][0]
+            legal_actions = input_streams_dict['legal_actions']
+            if isinstance(legal_actions,list):  legal_actions = legal_actions[0]
         legal_actions = legal_actions.to(qa.device)
         
         # The following accounts for player dimension if VDN:
         legal_qa = (1+qa-qa.min(dim=-1, keepdim=True)[0]) * legal_actions
         
+        action = None
+        if 'action' in input_streams_dict:
+            action = input_streams_dict['action']
+            if isinstance(action, list):    action = action[0]
         if action is None:
             if self.greedy:
                 action  = legal_qa.max(dim=-1, keepdim=True)[1]
