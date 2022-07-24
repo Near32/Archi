@@ -68,7 +68,10 @@ class Model(Module):
                     self.stream_handler.update(f"inputs:{m.get_id()}:{ks}",v)
         return 
 
-    def _forward(self, **kwargs):
+    def _forward(self, pipelines=None, **kwargs):
+        if pipelines is None:
+            pipelines = self.pipelines
+
         batch_size = 1
         for k,v in kwargs.items():
             if batch_size == 1\
@@ -84,7 +87,7 @@ class Model(Module):
         
         self.stream_handler.start_recording_new_entries()
 
-        for pipe_id, pipeline in self.pipelines.items():
+        for pipe_id, pipeline in pipelines.items():
             self.stream_handler.serve(pipeline)
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
@@ -96,12 +99,16 @@ class Model(Module):
 
         return new_streams_dict
 
-    def forward(self, obs, action=None, rnn_states=None, goal=None):
+    def forward(self, obs, action=None, rnn_states=None, goal=None, pipelines=None):
         assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
+        if pipelines is None:
+            pipelines = self.pipelines
+
         batch_size = obs.shape[0]
         
         self.output_stream_dict = self._forward(
-	    obs=obs,
+	    pipelines=pipelines,
+            obs=obs,
             action=action,
 	    **rnn_states,
 	)
@@ -127,6 +134,12 @@ class Model(Module):
         })
 
         return prediction
+    
+    def get_torso(self):
+        return partial(self.forward, pipelines={"torso":self.pipelines["torso"]})
+
+    def get_head(self):
+        return partial(self.forward, pipelines={"head":self.pipellines["head"]})
 
 
 def load_model(config: Dict[str, object]) -> Model:
