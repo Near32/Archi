@@ -7,4 +7,5 @@ from .recurrent_network_module import LSTMModule, GRUModule
 from .differentiable_neural_computer_module import DNCModule
 from .key_value_memory_module import KeyValueMemoryModule
 from .RL_categorical_head_module import RLCategoricalHeadModule
+from .concatenation_operation_module import ConcatenationOperationModule
 
