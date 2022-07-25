@@ -122,6 +122,9 @@ def recursive_inplace_update(
                         for value in extra_dict[node_key][leaf_key]
                 ]
                 #listvalue = [value.clone() for value in extra_dict[node_key][leaf_key]]
+                if leaf_key not in in_dict[node_key]:
+                    # initializing here, and preprocessing below...
+                    in_dict[node_key][leaf_key] = listvalue
                 if batch_mask_indices is None\
                 or batch_mask_indices==[]:
                     in_dict[node_key][leaf_key]= listvalue
@@ -132,7 +135,7 @@ def recursive_inplace_update(
                         if not isinstance(v, torch.Tensor): 
                             in_dict[node_key][leaf_key][vidx] = v
                             continue
-                        new_v = v[batch_mask_indices, ...].clone()
+                        new_v = v[batch_mask_indices, ...].clone().to(in_dict[node_key][leaf_key][vidx].device)
                         if preprocess_fn is not None:   new_v = preprocess_fn(new_v)
                         in_dict[node_key][leaf_key][vidx][batch_mask_indices, ...] = new_v
 

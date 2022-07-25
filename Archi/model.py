@@ -1,14 +1,15 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import os
 import copy
+from functools import partial
 
 import torch
 import torch.nn as nn
 
 from Archi.utils import StreamHandler
 from Archi.modules import Module, load_module 
-from Archi.modules.utils import copy_hdict
+from Archi.modules.utils import copy_hdict, recursive_inplace_update
 
 
 class Model(Module):
@@ -58,6 +59,12 @@ class Model(Module):
         
         # Reset States:
         self.reset_states()
+    
+    def get_reset_states(self, kwargs):
+        batch_size = kwargs.get("repeat", 1)
+        cuda = kwargs.get("cuda", False)
+        self.reset_states(batch_size=batch_size, cuda=cuda)
+        return copy_hdict(self.stream_handler["inputs"])
 
     def reset_states(self, batch_size=1, cuda=False):
         self.batch_size = batch_size
@@ -71,27 +78,37 @@ class Model(Module):
     def _forward(self, pipelines=None, **kwargs):
         if pipelines is None:
             pipelines = self.pipelines
-
+        
+        self.stream_handler.reset("inputs")
+        self.stream_handler.reset("outputs")
+        
         batch_size = 1
+        batch_size_set = False
         for k,v in kwargs.items():
             if batch_size == 1\
-            and v is not None:
+            and isinstance(v, torch.Tensor):
                 batch_size = v.shape[0]
+                batch_size_set = True
             self.stream_handler.update(f"inputs:{k}", v)
-        if self.batch_size != batch_size: 
+        if self.batch_size != batch_size:
+            assert batch_size_set, "Archi:Model : batch size was not reset properly. Need to provide an observation that is torch.Tensor, maybe?"
             self.reset_states(batch_size=batch_size)
 
         self.stream_handler.reset("logs_dict")
         self.stream_handler.reset("losses_dict")
         self.stream_handler.reset("signals")
         
+        for inp, out in self.config["input_mappings"].items():
+            inp_v = self.stream_handler[inp]
+            self.stream_handler.update(out, inp_v)
+
         self.stream_handler.start_recording_new_entries()
 
         for pipe_id, pipeline in pipelines.items():
             self.stream_handler.serve(pipeline)
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
-        self.data_dict = {'inputs':copy_hdict(self.stream_handler.get_data()['inputs'])}
+        #self.data_dict = {'inputs':copy_hdict(self.stream_handler.get_data()['inputs'])}
 
 	# Output mapping:
         for k,v in self.config['output_mappings'].items():
@@ -99,7 +116,13 @@ class Model(Module):
 
         return new_streams_dict
 
-    def forward(self, obs, action=None, rnn_states=None, goal=None, pipelines=None):
+    def forward(self, 
+        obs: torch.Tensor, 
+        action: Optional[torch.Tensor]=None, 
+        rnn_states: Optional[Dict[str,object]]=None, 
+        goal: Optional=None, 
+        pipelines: Optional[Dict[str,List]]=None,
+        return_features: Optional[bool]=False):
         assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
         if pipelines is None:
             pipelines = self.pipelines
@@ -113,6 +136,7 @@ class Model(Module):
 	    **rnn_states,
 	)
         
+        action = self.output_stream_dict["outputs:action"]
         entropy = self.output_stream_dict["outputs:ent"]
         qa = self.output_stream_dict["outputs:qa"]
         legal_log_probs = self.output_stream_dict["outputs:log_a"]
@@ -124,28 +148,37 @@ class Model(Module):
             'log_a': legal_log_probs,
         }
         
-        next_rnn_states = {}
-        for k in rnn_states.keys():
-            next_rnn_states[k] = self.data_dict["inputs"][k]
+        next_rnn_states = copy.deepcopy(rnn_states)
+        if "inputs" in self.output_stream_dict:
+            recursive_inplace_update(
+                in_dict=next_rnn_states,
+                extra_dict=self.output_stream_dict["inputs"],
+            )
         
         prediction.update({
             'rnn_states': rnn_states,
             'next_rnn_states': next_rnn_states
         })
+        
+        if return_features:
+            features = self.stream_handler[self.config["features_id"]]
+            return features, prediction
 
         return prediction
     
     def get_torso(self):
-        return partial(self.forward, pipelines={"torso":self.pipelines["torso"]})
+        return partial(self.forward, pipelines={"torso":self.pipelines["torso"]}, return_features=True)
 
     def get_head(self):
-        return partial(self.forward, pipelines={"head":self.pipellines["head"]})
+        return partial(self.forward, pipelines={"head":self.pipelines["head"]})
 
 
 def load_model(config: Dict[str, object]) -> Model:
     mcfg = {}
     
     mcfg['output_mappings'] = config.get("output_mappings", {}) 
+    mcfg['input_mappings'] = config.get("input_mappings", {}) 
+    mcfg['features_id'] = config.get("features_id", "input:obs") 
     mcfg['pipelines'] = config['pipelines']
     mcfg['modules'] = {}
     for mk, m_kwargs in config['modules'].items():

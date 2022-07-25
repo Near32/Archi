@@ -79,7 +79,8 @@ class RLCategoricalHeadModule(Module):
         """
         outputs_stream_dict = {}
 
-        phi_features_list = [v for k,v in input_streams_dict.items() if 'input' in k]
+        phi_features_list = [v[0] if isinstance(v, list) else v for k,v in input_streams_dict.items() if 'input' in k]
+        if self.use_cuda:   phi_features_list = [v.cuda() for v in phi_features_list]
         phi_features = torch.cat(phi_features_list, dim=-1)
         
         if self.use_cuda:   phi_features = phi_features.cuda()
@@ -89,7 +90,7 @@ class RLCategoricalHeadModule(Module):
         legal_actions = torch.ones_like(qa)
         if 'legal_actions' in input_streams_dict: 
             legal_actions = input_streams_dict['legal_actions']
-            if isinstance(legal_actions,list):  legal_actions = legal_actions[0]
+            if isinstance(legal_actions, list):  legal_actions = legal_actions[0]
         legal_actions = legal_actions.to(qa.device)
         
         # The following accounts for player dimension if VDN:

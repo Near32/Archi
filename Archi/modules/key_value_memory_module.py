@@ -77,6 +77,13 @@ class KeyValueMemoryModule(Module):
         output_dict = {}
         
         batch_size = iteration[0].shape[0]
+        
+        # Masking memory: there cannot be more memory entry than the current iteration count,
+        # which can be different on each batch dimension... :
+        nbr_memory_items = value_memory.shape[1]
+        memory_mask = (torch.arange(nbr_memory_items).unsqueeze(0).repeat(batch_size, 1) <= iteration[0]).long().to(gate.device)
+        import ipdb; ipdb.set_trace()
+        # TODO: check memory_mask
         not_first_mask = (iteration[0].reshape(-1) > 1) 
         # 1 and not 0, because the CoreLSTM has already updated it...
         # (batch_size, )
@@ -87,12 +94,15 @@ class KeyValueMemoryModule(Module):
         
         if not_first_mask.long().sum() > 0: 
             not_first_indices = torch.masked_select(
-                input=not_first_mask.long() * torch.arange(batch_size),
+                input=not_first_mask.long() * torch.arange(batch_size).to(not_first_mask.device),
                 mask=not_first_mask,
             )
             # (1<= dim <=batch_size, )
             # (batch_size, n, value_dim)
             vm = value_memory[0][not_first_indices, ...].to(gate.device)
+            import ipdb; ipdb.set_trace()
+            vm = vm*memory_mask
+            # TODO: check vm for zeroing out on batch dim where iteration
             # (dim, n , value_dim)
             z = new_value[not_first_indices, ...]
             # Similarities:

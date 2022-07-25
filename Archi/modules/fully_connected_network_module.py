@@ -143,6 +143,9 @@ class FullyConnectedNetworkModule(Module):
         outputs_stream_dict = {}
 
         for key, experiences in input_streams_dict.items():
+            if isinstance(experiences, list):
+                assert len(experiences)==1, f"Provided too many input on id:{key}"
+                experiences = experiences[0]
             batch_size = experiences.size(0)
 
             experiences = experiences.view(batch_size, -1)
