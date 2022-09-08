@@ -3,6 +3,7 @@ from typing import Dict, List
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
+import copy
 
 from Archi.modules.module import Module 
 from Archi.modules.fully_connected_network_module import FullyConnectedNetworkModule as FCNM
@@ -78,12 +79,12 @@ class KeyValueMemoryModule(Module):
         
         batch_size = iteration[0].shape[0]
         
-        # Masking memory: there cannot be more memory entry than the current iteration count,
-        # which can be different on each batch dimension... :
-        nbr_memory_items = value_memory.shape[1]
-        memory_mask = (torch.arange(nbr_memory_items).unsqueeze(0).repeat(batch_size, 1) <= iteration[0]).long().to(gate.device)
-        import ipdb; ipdb.set_trace()
-        # TODO: check memory_mask
+        # Masking memory: there can be more memory entry than the current iteration count for each batch element,
+        # especially when mixing together batch elements at different timeline for update:
+        nbr_memory_items = value_memory[0].shape[1]
+        enumerate_memory_items = torch.arange(nbr_memory_items).unsqueeze(0).repeat(batch_size, 1).to(gate.device)
+        memory_mask = (enumerate_memory_items <= iteration[0].to(gate.device)).long().unsqueeze(-1)
+        # (batch_size x nbr_memory_items x 1)
         not_first_mask = (iteration[0].reshape(-1) > 1) 
         # 1 and not 0, because the CoreLSTM has already updated it...
         # (batch_size, )
@@ -100,9 +101,7 @@ class KeyValueMemoryModule(Module):
             # (1<= dim <=batch_size, )
             # (batch_size, n, value_dim)
             vm = value_memory[0][not_first_indices, ...].to(gate.device)
-            import ipdb; ipdb.set_trace()
-            vm = vm*memory_mask
-            # TODO: check vm for zeroing out on batch dim where iteration
+            vm = vm*memory_mask[not_first_indices, ...]
             # (dim, n , value_dim)
             z = new_value[not_first_indices, ...]
             # Similarities:
@@ -139,8 +138,43 @@ class KeyValueMemoryModule(Module):
             )
 
         # Write values in memory:
-        new_key_memory = torch.cat([key_memory[0].to(gate.device), new_key.unsqueeze(1)], dim=1)
-        new_value_memory = torch.cat([value_memory[0].to(gate.device), new_value.unsqueeze(1)], dim=1)
+        #new_key_memory = torch.cat([key_memory[0].to(gate.device), new_key.unsqueeze(1)], dim=1)
+        #new_value_memory = torch.cat([value_memory[0].to(gate.device), new_value.unsqueeze(1)], dim=1)
+        # AT THE CORRECT INDEX, irrespective of the actual size of the memory,
+        # but with respect to the iteration count:
+        # Because the CoreLSTM from which the iteration tensor comes from has already updated it,
+        # the iteration count corresponds to the slot in which the new memory elements should be inserted:
+        # check that the memory is big enough:
+        
+        #print(f"iterations memory size:", iteration[0].transpose(0,1), key_memory[0].shape)
+
+        """
+        let us resize the memory to fit the iteration needs:
+        """
+        max_it = iteration[0].long().max().item()
+        new_key_memory = key_memory[0][:,:max_it,...].clone().to(gate.device)
+        new_value_memory = value_memory[0][:,:max_it,...].clone().to(gate.device)
+        """
+        new_key_memory = key_memory[0].clone().to(gate.device)
+        new_value_memory = value_memory[0].clone().to(gate.device)
+        """
+        nbr_memory_items = new_key_memory.shape[-2]
+
+        while nbr_memory_items <= max_it:
+            new_key_memory = torch.cat([new_key_memory, torch.zeros_like(new_key).unsqueeze(1)], dim=1)
+            new_value_memory = torch.cat([new_value_memory, torch.zeros_like(new_value).unsqueeze(1)], dim=1)
+            nbr_memory_items = new_key_memory.shape[-2]
+                    
+        new_key_memory.scatter_(
+            dim=-2,
+            index=iteration[0].long().unsqueeze(-1).repeat(1,1,new_key.shape[-1]).to(gate.device),
+            src=new_key.unsqueeze(1),
+        )
+        new_value_memory.scatter_(
+            dim=-2,
+            index=iteration[0].long().unsqueeze(-1).repeat(1,1,new_value.shape[-1]).to(gate.device),
+            src=new_value.unsqueeze(1),
+        )
 
         outputs_dict = {
             'key_memory': [new_key_memory],

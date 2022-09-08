@@ -112,8 +112,6 @@ class LSTMModule(Module):
             # Consider not applying activation functions on last layer's output
             if self.non_linearities[idx] is not None:
                 nhx = self.non_linearities[idx](nhx)
-            x = nhx
-
         return nhx, {'hidden': next_hstates, 'cell': next_cstates, 'iteration': niteration}
     
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
@@ -263,7 +261,6 @@ class GRUModule(Module):
             # Consider not applying activation functions on last layer's output
             if self.non_linearities[idx] is not None:
                 nhx = self.non_linearities[idx](nhx)
-            x = nhx
         return nhx, {'hidden': next_hstatesi, 'iteration': niteration}
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :

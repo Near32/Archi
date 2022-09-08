@@ -61,17 +61,38 @@ class Model(Module):
         self.reset_states()
     
     def get_reset_states(self, kwargs):
+        """
+        Provide a reset state without changing the current state.
+        """
         batch_size = kwargs.get("repeat", 1)
         cuda = kwargs.get("cuda", False)
-        self.reset_states(batch_size=batch_size, cuda=cuda)
-        return copy_hdict(self.stream_handler["inputs"])
+        rs = {}
+        for k,m in self.config['modules'].items():
+            if hasattr(m, 'get_reset_states'):
+                reset_dict = m.get_reset_states(repeat=batch_size, cuda=cuda)
+                #print(f"module {k} : reset dict:")
+                #for ks, v in reset_dict.items():
+                #    #print(f"--> {ks} : {type(v)}")
+                rs[m.get_id()] = reset_dict
+        return rs
+        #self.reset_states(batch_size=batch_size, cuda=cuda)
+        #return copy_hdict(self.stream_handler["inputs"])
+    
+    def reset_noise(self):
+        # TODO : investiguate implementation of parameter noise ...
+        pass
 
     def reset_states(self, batch_size=1, cuda=False):
+        # WATCHOUT: reset states is usually called after inputs has been setup with obs etc.
+        # Thus, it is not possible to call the following:
+        # self.stream_handler.reset("inputs")
         self.batch_size = batch_size
         for k,m in self.config['modules'].items():
             if hasattr(m, 'get_reset_states'):
                 reset_dict = m.get_reset_states(repeat=batch_size, cuda=cuda)
+                #print(f"module {k} : reset dict:")
                 for ks, v in reset_dict.items():
+                    #print(f"--> {ks} : {type(v)}")
                     self.stream_handler.update(f"inputs:{m.get_id()}:{ks}",v)
         return 
 
@@ -90,9 +111,14 @@ class Model(Module):
                 batch_size = v.shape[0]
                 batch_size_set = True
             self.stream_handler.update(f"inputs:{k}", v)
+        # TODO: assert that the following lines are not necessary
+        # since all the inputs that are part of the states should have
+        # been resetted properly from above...
+        """
         if self.batch_size != batch_size:
             assert batch_size_set, "Archi:Model : batch size was not reset properly. Need to provide an observation that is torch.Tensor, maybe?"
             self.reset_states(batch_size=batch_size)
+        """
 
         self.stream_handler.reset("logs_dict")
         self.stream_handler.reset("losses_dict")
@@ -148,7 +174,7 @@ class Model(Module):
             'log_a': legal_log_probs,
         }
         
-        next_rnn_states = copy.deepcopy(rnn_states)
+        next_rnn_states = copy_hdict(rnn_states)
         if "inputs" in self.output_stream_dict:
             recursive_inplace_update(
                 in_dict=next_rnn_states,
