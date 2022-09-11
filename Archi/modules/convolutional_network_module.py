@@ -362,6 +362,9 @@ class ConvolutionalNetworkModule(Module):
         if self.use_cuda:
             self = self.cuda()
 
+    def reset(self):
+        self.features_map = None
+        self.features = None
 
     def _compute_feat_map(self, x):
         feat_map = x 

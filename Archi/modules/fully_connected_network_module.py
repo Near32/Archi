@@ -123,6 +123,9 @@ class FullyConnectedNetworkModule(Module):
         self.use_cuda = use_cuda
         if self.use_cuda:
             self = self.cuda()
+    
+    def reset(self):
+        self.output = None 
 
     def forward(self, x):
         self.output = self.layers(x)

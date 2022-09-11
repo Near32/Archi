@@ -76,11 +76,14 @@ class Model(Module):
         
         # Register Modules:
         for k,m in self.config['modules'].items():
+            if hasattr(m, "reset"):  m.reset()
             self.stream_handler.update(f"modules:{m.get_id()}:ref", m)
 
         # Reset States:
         self.reset_states()
- 
+        
+        self.output_stream_dict = None
+
     def reset_noise(self):
         # TODO : investiguate implementation of parameter noise ...
         pass
