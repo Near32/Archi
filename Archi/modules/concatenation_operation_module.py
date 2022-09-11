@@ -25,8 +25,8 @@ class ConcatenationOperationModule(Module):
         )
         
     def forward(self, **inputs):
-        self.output = torch.cat([v for k,v in inputs.items()], dim=self.config['dim'])
-        return self.output
+        output = torch.cat([v for k,v in inputs.items()], dim=self.config['dim'])
+        return output
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
         """
