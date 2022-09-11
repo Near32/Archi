@@ -37,19 +37,6 @@ class Model(Module):
         assert 'modules' in self.config
         assert 'pipelines' in self.config
         
-        self.stream_handler = StreamHandler()
-        self.stream_handler.register("logs_dict")
-        self.stream_handler.register("losses_dict")
-        self.stream_handler.register("signals")
-        
-        # Register Hyperparameters:
-        for k,v in self.config.items():
-            self.stream_handler.update(f"config:{k}", v)
-        
-        # Register Modules:
-        for k,m in self.config['modules'].items():
-            self.stream_handler.update(f"modules:{m.get_id()}:ref", m)
-        
         self.modules = self.config['modules']
         for km, vm in self.modules.items():
             self.add_module(km, vm)
@@ -57,9 +44,8 @@ class Model(Module):
         # Register Pipelines:
         self.pipelines = self.config['pipelines']
         
-        # Reset States:
-        self.reset_states()
-    
+        self.reset()
+   
     def get_reset_states(self, kwargs):
         """
         Provide a reset state without changing the current state.
@@ -77,7 +63,24 @@ class Model(Module):
         return rs
         #self.reset_states(batch_size=batch_size, cuda=cuda)
         #return copy_hdict(self.stream_handler["inputs"])
-    
+   
+    def reset(self):
+        self.stream_handler = StreamHandler()
+        self.stream_handler.register("logs_dict")
+        self.stream_handler.register("losses_dict")
+        self.stream_handler.register("signals")
+        
+        # Register Hyperparameters:
+        for k,v in self.config.items():
+            self.stream_handler.update(f"config:{k}", v)
+        
+        # Register Modules:
+        for k,m in self.config['modules'].items():
+            self.stream_handler.update(f"modules:{m.get_id()}:ref", m)
+
+        # Reset States:
+        self.reset_states()
+ 
     def reset_noise(self):
         # TODO : investiguate implementation of parameter noise ...
         pass
