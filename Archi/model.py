@@ -140,12 +140,13 @@ class Model(Module):
             self.stream_handler.serve(pipeline)
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
-        #self.data_dict = {'inputs':copy_hdict(self.stream_handler.get_data()['inputs'])}
 
 	# Output mapping:
         for k,v in self.config['output_mappings'].items():
-            new_streams_dict[f"outputs:{k}"] = self.stream_handler[v]
-
+            value = self.stream_handler[v] 
+            if value is not None:
+                new_streams_dict[f"outputs:{k}"] = value
+        
         return new_streams_dict
 
     def forward(self, 
@@ -160,7 +161,9 @@ class Model(Module):
             pipelines = self.pipelines
 
         batch_size = obs.shape[0]
-        
+       
+        self.reset()
+
         self.output_stream_dict = self._forward(
 	    pipelines=pipelines,
             obs=obs,
@@ -168,17 +171,17 @@ class Model(Module):
 	    **rnn_states,
 	)
         
-        action = self.output_stream_dict["outputs:action"]
-        entropy = self.output_stream_dict["outputs:ent"]
-        qa = self.output_stream_dict["outputs:qa"]
-        legal_log_probs = self.output_stream_dict["outputs:log_a"]
-        
-        prediction = {
-            'a': action,
-            'ent': entropy,
-            'qa': qa,
-            'log_a': legal_log_probs,
+        id2output = {
+            "a":"outputs:action",
+            "ent":"outputs:ent",
+            "qa":"outputs:qa",
+            "log_a":"outputs:log_a",
         }
+        
+        prediction = {}
+        for kid,key in id2output.items():
+            if key in self.output_stream_dict:
+                prediction[kid] = self.output_stream_dict[key]
         
         next_rnn_states = copy_hdict(rnn_states)
         if "inputs" in self.output_stream_dict:
@@ -194,6 +197,9 @@ class Model(Module):
         
         if return_features:
             features = self.stream_handler[self.config["features_id"]]
+            if isinstance(features, list):
+                assert len(features) == 1
+                features = features[0]
             return features, prediction
 
         return prediction

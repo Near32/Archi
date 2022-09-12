@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn 
@@ -11,12 +11,14 @@ class Module(nn.Module):
         type:str,
         config:Dict[str,object],
         input_stream_ids:Dict[str,str],
+        output_stream_ids:Optional[Dict[str,str]]={},
     ):
         super(Module, self).__init__()
         self.id = id
         self.type = type
         self.config = config
         self.input_stream_ids = input_stream_ids
+        self.output_stream_ids = output_stream_ids 
 
     def get_id(self) -> str:
         return self.id

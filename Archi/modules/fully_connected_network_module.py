@@ -21,6 +21,7 @@ class FullyConnectedNetworkModule(Module):
         id='FCNModule_0', 
         config=None,
         input_stream_ids=None,
+        output_stream_ids={},
         use_cuda=False
     ):
 
@@ -29,6 +30,7 @@ class FullyConnectedNetworkModule(Module):
             type="FullyConnectedNetworkModule",
             config=config,
             input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
         )
         
         if isinstance(state_dim,int): state_dim = [state_dim]
@@ -146,6 +148,10 @@ class FullyConnectedNetworkModule(Module):
         outputs_stream_dict = {}
 
         for key, experiences in input_streams_dict.items():
+            output_key = f"processed_{key}"
+            if key in self.output_stream_ids:
+                output_key = self.output_stream_ids[key]
+
             if isinstance(experiences, list):
                 assert len(experiences)==1, f"Provided too many input on id:{key}"
                 experiences = experiences[0]
@@ -155,8 +161,8 @@ class FullyConnectedNetworkModule(Module):
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.layers(experiences)
-            outputs_stream_dict[f'processed_{key}'] = features
-
+            outputs_stream_dict[output_key] = [features]
+        
         return outputs_stream_dict 
 
     def get_feature_shape(self):

@@ -15,6 +15,7 @@ class ConcatenationOperationModule(Module):
         id='ConcatenationOperationModule_0', 
         config=None,
         input_stream_ids=None,
+        output_stream_ids={},
     ):
 
         super(ConcatenationOperationModule, self).__init__(
@@ -22,6 +23,7 @@ class ConcatenationOperationModule(Module):
             type="ConcatenationOperationModule",
             config=config,
             input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
         )
         
     def forward(self, **inputs):
@@ -42,8 +44,21 @@ class ConcatenationOperationModule(Module):
         """
         outputs_stream_dict = {}
 
-        inputs = {k:v for k,v in input_streams_dict.items() if 'input' in k}
-        outputs_stream_dict[f'output'] = self.forward(**inputs)
+        if isinstance(list(input_streams_dict.values())[0], list):
+            nbr_elements = len(list(input_streams_dict.values())[0])
+            output_list = []
+            for idx in range(nbr_elements):
+                inputs = {k:v[idx] for k,v in input_streams_dict.items() if 'input' in k}
+                output_list.append( self.forward(**inputs))    
+            outputs_stream_dict[f'output'] = output_list
+        else:
+            inputs = {k:v for k,v in input_streams_dict.items() if 'input' in k}
+            outputs_stream_dict[f'output'] = self.forward(**inputs)
+        
+        for k in input_streams_dict.keys():
+            if 'input' not in k:    continue
+            if k in self.output_stream_ids:
+                outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict['output']
 
         return outputs_stream_dict 
 

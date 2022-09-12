@@ -190,6 +190,7 @@ class ConvolutionalNetworkModule(Module):
         id='CNModule_0', 
         config=None,
         input_stream_ids=None,
+        output_stream_ids={},
         use_cuda=False,
     ):
         '''
@@ -214,6 +215,7 @@ class ConvolutionalNetworkModule(Module):
             type="ConvolutionalNetworkModule",
             config=config,
             input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
         )
 
         original_conv_fn = nn.Conv2d
@@ -405,6 +407,10 @@ class ConvolutionalNetworkModule(Module):
         outputs_stream_dict = {}
 
         for key, experiences in input_streams_dict.items():
+            output_key = f"processed_{key}"
+            if key in self.output_stream_ids:
+                output_key = self.output_stream_ids[key]
+
             if isinstance(experiences, list):
                 assert len(experiences)==1, f"Provided too many input on id:{key}"
                 experiences = experiences[0]
@@ -414,7 +420,7 @@ class ConvolutionalNetworkModule(Module):
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.forward(experiences)
-            outputs_stream_dict[f'processed_{key}'] = features
+            outputs_stream_dict[output_key] = features
             
         return outputs_stream_dict 
 

@@ -201,12 +201,12 @@ class KeyValueMemoryModule(Module):
         
         iteration = input_streams_dict['iteration']
 
-        new_value = input_streams_dict['new_value']
-        new_key = input_streams_dict['new_key']
+        new_value = input_streams_dict['new_value'][0]
+        new_key = input_streams_dict['new_key'][0]
         value_memory = input_streams_dict['value_memory']
         key_memory = input_streams_dict['key_memory']
         
-        gate = input_streams_dict['gate']
+        gate = input_streams_dict['gate'][0]
 
         output_dict = self.forward(
             iteration=iteration,

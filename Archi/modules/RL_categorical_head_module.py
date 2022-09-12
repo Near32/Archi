@@ -22,6 +22,7 @@ class RLCategoricalHeadModule(Module):
         id='RLCategoricalHeadModule_0', 
         config=None,
         input_stream_ids=None,
+        output_stream_ids={},
         layer_init_fn=layer_init,
         use_cuda=False
     ):
@@ -31,6 +32,7 @@ class RLCategoricalHeadModule(Module):
             type="RLCategoricalHeadModule",
             config=config,
             input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
         )
         
         self.greedy = True
