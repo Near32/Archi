@@ -45,6 +45,9 @@ class KeyValueMemoryModule(Module):
         self.use_cuda = use_cuda
         if self.use_cuda:
             self = self.cuda()
+    
+    def reset(self):
+        self.confidence_fcn.reset()
 
     def initialize_memories(self):
         # Constant
