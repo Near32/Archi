@@ -1,7 +1,7 @@
 model_id: 'TestModel'
 
 input_stream_ids:
-        "inputs:x" : "observations:obs_x"
+        "inputs:obs" : "observations:obs"
         "inputs:y" : "infos:info_y"
 
 modules:
@@ -21,8 +21,10 @@ modules:
                 discount_factor: 0.99
                 config: None
                 input_stream_ids:
-                        dnc_input: 'modules:CoreLSTM:lstm_output'
+                        dnc_input: 'inputs:CoreLSTM:lstm_output'
                         #dnc_framestate: 'inputs:SecondaryDNC:dnc'
+                output_stream_ids:
+                        dnc_output: "inputs:SecondaryDNC:dnc_output"
                 use_cuda: True
         'CoreLSTM':
                 type: LSTMModule
@@ -31,10 +33,12 @@ modules:
                 non_linearities: [None, 'ReLU']
                 config: None
                 input_stream_ids:
-                        lstm_input: "modules:FCNModule_0:processed_input"
+                        lstm_input: "inputs:FCNModule_0:processed_input"
                         lstm_hidden: "inputs:CoreLSTM:hidden"
                         #lstm_cell: "inputs:CoreLSTM:cell"
                         #iteration: "inputs:CoreLSTM:iteration"
+                output_stream_ids:
+                        lstm_output: "inputs:CoreLSTM:lstm_output"
                 use_cuda: True
 
         'FCNModule_0':
@@ -48,7 +52,9 @@ modules:
                         test_entry: None
                         test_entry2: None
                 input_stream_ids:
-                        input: "modules:ConvNetModule_0:processed_input"
+                        input: "inputs:ConvNetModule_0:processed_input"
+                output_stream_ids:
+                        input: "inputs:FCNModule_0:processed_input"
                 use_cuda: True
         
         'ConvNetModule_0':
@@ -68,7 +74,9 @@ modules:
                         test_entry: None
                         test_entry2: None
                 input_stream_ids:
-                        input: "inputs:x"
+                        input: "inputs:obs"
+                output_stream_ids:
+                        input: "inputs:ConvNetModule_0:processed_input"
                 use_cuda: True
 
 pipelines:

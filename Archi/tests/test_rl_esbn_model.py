@@ -80,13 +80,13 @@ def test_model_forward():
     prediction1 = model(**inputs_dict1)
     output1 = model.output_stream_dict
 
-    assert 'lstm_output' in output['modules']['CoreLSTM']
-    assert 'processed_input' in output['modules']['ToOutputFCN']
+    assert 'lstm_output' in output['inputs']['CoreLSTM']
+    assert 'processed_input' in output['inputs']['ToOutputFCN']
     assert 'qa' in output['modules']['RLHead']
     assert 'ent' in output['modules']['RLHead']
     assert 'log_a' in output['modules']['RLHead']
-    assert 'processed_input' in output['modules']['Encoder']
-    assert 'processed_input' in output['modules']['ToGateFCN']
+    assert 'processed_input' in output['inputs']['Encoder']
+    assert 'processed_input' in output['inputs']['ToGateFCN']
     assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
     assert output1['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() != 0.0    
     assert len(dict(model.named_parameters())) != 0

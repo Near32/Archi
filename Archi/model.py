@@ -152,7 +152,7 @@ class Model(Module):
     def forward(self, 
         obs: torch.Tensor, 
         action: Optional[torch.Tensor]=None, 
-        rnn_states: Optional[Dict[str,object]]=None, 
+        rnn_states: Optional[Dict[str,object]]={}, 
         goal: Optional=None, 
         pipelines: Optional[Dict[str,List]]=None,
         return_features: Optional[bool]=False,

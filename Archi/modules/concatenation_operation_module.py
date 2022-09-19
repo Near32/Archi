@@ -59,7 +59,10 @@ class ConcatenationOperationModule(Module):
             if 'input' not in k:    continue
             if k in self.output_stream_ids:
                 outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict['output']
-
+        
+        # Bookkeeping:
+        for k in list(outputs_stream_dict.keys()):
+            outputs_stream_dict[f"inputs:{self.id}:{k}"] = outputs_stream_dict[k]
         return outputs_stream_dict 
 
     def get_feature_shape(self):

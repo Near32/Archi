@@ -82,6 +82,88 @@ def recursive_inplace_update(
                         needs recursive inplace update. If None, everything is updated.
     '''
     if in_dict is None: return None
+    
+    in_queue = [in_dict]
+    extra_queue = [extra_dict]
+
+    while len(extra_queue):
+        in_pointer = in_queue.pop(0)
+        extra_pointer = extra_queue.pop(0)
+
+        leaf_keys = get_leaf_keys(extra_pointer)
+        for key in extra_pointer:
+            needed_init = False
+            if key not in in_pointer:
+                # initializing here, and preprocessing below...
+                in_pointer[key] = {}
+                needed_init = True 
+
+            if key not in leaf_keys:
+                in_queue.append(in_pointer[key])
+                extra_queue.append(extra_pointer[key])
+                continue
+            
+            # else : we know this key is a leaf_key:
+            leaf_key = key
+            listvalue = [value.clone() for value in extra_pointer[leaf_key]]
+            if needed_init: #leaf_key not in in_pointer:
+                # initializing here, and preprocessing below...
+                in_pointer[leaf_key] = listvalue
+            
+            if batch_mask_indices is None or batch_mask_indices==[]:
+                in_pointer[leaf_key]= listvalue
+            else:
+                for vidx in range(len(in_pointer[leaf_key])):
+                    v = listvalue[vidx]
+                    
+                    # SPARSE-NESS : check & record
+                    sparse_v = False
+                    if getattr(v, "is_sparse", False):
+                        sparse_v = True
+                        v = v.to_dense()
+                    
+                    # PREPROCESSING :
+                    new_v = v[batch_mask_indices, ...].clone().to(in_pointer[leaf_key][vidx].device)
+                    if preprocess_fn is not None:   new_v = preprocess_fn(new_v)
+                    
+                    # SPARSE-NESS : init
+                    if in_pointer[leaf_key][vidx].is_sparse:
+                        in_pointer[leaf_key][vidx] = in_pointer[leaf_key][vidx].to_dense()
+                    
+                    # ASSIGNMENT:
+                    if assign_fn is not None:
+                        assign_fn(
+                            dest_d=in_pointer,
+                            leaf_key=leaf_key,
+                            vidx=vidx,
+                            batch_mask_indices=batch_mask_indices,
+                            new_v=new_v,
+                        )
+                    else:
+                        in_pointer[leaf_key][vidx][batch_mask_indices, ...] = new_v
+                    
+                    # SPARSE-NESS / POST-PROCESSING:
+                    if sparse_v:
+                        v = v.to_sparse()
+                        in_pointer[leaf_key][vidx] = in_pointer[leaf_key][vidx].to_sparse()
+    
+    return 
+
+def DEPRECATED0_recursive_inplace_update(
+    in_dict: Dict,
+    extra_dict: Union[Dict, torch.Tensor],
+    batch_mask_indices: Optional[torch.Tensor]=None,
+    preprocess_fn: Optional[Callable] = None,
+    assign_fn: Optional[Callable] = None):
+    '''
+    Taking both :param: in_dict, extra_dict as tree structures,
+    adds the nodes of extra_dict into in_dict via tree traversal.
+    Extra leaf keys are created if and only if the update is over the whole batch, i.e. :param
+    batch_mask_indices: is None.
+    :param batch_mask_indices: torch.Tensor of shape (batch_size,), containing batch indices that
+                        needs recursive inplace update. If None, everything is updated.
+    '''
+    if in_dict is None: return None
     leaf_keys = get_leaf_keys(extra_dict)
     for leaf_key in leaf_keys:
         # In order to make sure that the lack of deepcopy at this point will not endanger

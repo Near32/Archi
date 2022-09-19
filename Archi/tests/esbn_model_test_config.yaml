@@ -7,7 +7,7 @@ hyperparameters:
         output_dim: 8
 
 input_stream_ids:
-        "inputs:x" : "observations:obs_x"
+        "inputs:obs" : "observations:obs_x"
 
 modules:
         'CoreLSTM':
@@ -19,8 +19,10 @@ modules:
                 input_stream_ids:
                         lstm_input: "inputs:KeyValueMemory:read_key_plus_conf"
                         lstm_hidden: "inputs:CoreLSTM:hidden"
-                        #lstm_cell: "inputs:CoreLSTM:cell"
+                        lstm_cell: "inputs:CoreLSTM:cell"
                         iteration: "inputs:CoreLSTM:iteration"
+                output_stream_ids:
+                        lstm_output: "inputs:CoreLSTM:lstm_output"
                 use_cuda: True
         
         'KeyValueMemory':
@@ -29,10 +31,10 @@ modules:
                 value_dim: 64 #"{{value_dim}}"
                 config: None
                 input_stream_ids:
-                        iteration: "modules:CoreLSTM:iteration"
-                        new_key: "modules:ToKeyFCN:processed_input"
-                        new_value: "modules:Encoder:processed_input"
-                        gate: "modules:ToGateFCN:processed_input"
+                        iteration: "inputs:CoreLSTM:iteration"
+                        new_key: "inputs:ToKeyFCN:processed_input"
+                        new_value: "inputs:Encoder:processed_input"
+                        gate: "inputs:ToGateFCN:processed_input"
                         key_memory: "inputs:KeyValueMemory:key_memory"
                         value_memory: "inputs:KeyValueMemory:value_memory"
                 use_cuda: True
@@ -45,7 +47,9 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "modules:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:lstm_output"
+                output_stream_ids:
+                        input: "inputs:ToGateFCN:processed_input"
                 use_cuda: True
        
         'ToKeyFCN':
@@ -56,7 +60,9 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "modules:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:lstm_output"
+                output_stream_ids:
+                        input: "inputs:ToKeyFCN:processed_input"
                 use_cuda: True
         
         'ToOutputFCN':
@@ -67,7 +73,9 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "modules:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:lstm_output"
+                output_stream_ids:
+                        input: "inputs:ToOutputFCN:processed_input"
                 use_cuda: True
         
         'Encoder':
@@ -84,7 +92,9 @@ modules:
                 use_coordconv: False #True
                 config: None
                 input_stream_ids:
-                        input: "inputs:x"
+                        input: "inputs:obs"
+                output_stream_ids:
+                        input: "inputs:Encoder:processed_input"
                 use_cuda: True
 
 pipelines:

@@ -41,18 +41,35 @@ def test_model_forward():
     
     import torch 
 
+    batch_size = 4
+    use_cuda = True 
+
     inputs_dict = {
-        'x':torch.rand(4,3,64,64),
-        'y':torch.rand(4,32),
+        'obs': torch.rand(batch_size,3,64,64),
+        'rnn_states': {
+            'y':torch.rand(4,32),
+            **model.get_reset_states({"repeat":batch_size, "cuda":use_cuda}),
+        },
     }
 
-    output = model(**inputs_dict)
-    output1 = model(**inputs_dict)
+    prediction = model(**inputs_dict)
+    output = model.output_stream_dict
 
-    assert 'processed_input' in output['modules']['ConvNetModule_0']
-    assert 'processed_input' in output['modules']['FCNModule_0']
-    assert 'lstm_output' in output['modules']['CoreLSTM']
-    assert 'dnc_output' in output['modules']['SecondaryDNC']
+    inputs_dict1 = {
+        'obs': torch.rand(batch_size,3,64,64),
+        'rnn_states':{
+            'y': [torch.rand(4,32)],
+            **output['inputs'],
+        },
+    }
+
+    prediction1 = model(**inputs_dict1)
+    output1 = model.output_stream_dict
+
+    assert 'processed_input' in output['inputs']['ConvNetModule_0']
+    assert 'processed_input' in output['inputs']['FCNModule_0']
+    assert 'lstm_output' in output['inputs']['CoreLSTM']
+    assert 'dnc_output' in output['inputs']['SecondaryDNC']
     assert output1['inputs']['SecondaryDNC']['dnc']['dnc_body']['prev_read_vec'][0].max() != 0.0    
     assert len(dict(model.named_parameters())) != 0
     for np, p in model.named_parameters():

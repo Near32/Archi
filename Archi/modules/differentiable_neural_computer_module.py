@@ -779,6 +779,7 @@ class DNCModule(Module) :
         config:Dict[str,object] = {},
         id:str = 'DNCModule_0',
         input_stream_ids:Dict[str,str] = {},
+        output_stream_ids:Dict[str,str] = {},
         use_cuda:bool = False,
         #extra_inputs_infos: Optional[Dict]={},
         ):
@@ -797,6 +798,7 @@ class DNCModule(Module) :
             type="DNCModule",
             config=config,
             input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
         )
 
         self.input_dim = input_dim
@@ -1125,9 +1127,15 @@ class DNCModule(Module) :
         ))
         
         outputs_stream_dict[f'dnc_output'] = dnc_output
-        outputs_stream_dict['dnc_framestate'] = framestate_dict['dnc']
+        #outputs_stream_dict['dnc_framestate'] = framestate_dict['dnc']
         
+        for k in list(outputs_stream_dict.keys()):
+            if k in self.output_stream_ids:
+                outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict[k]
+
         # Bookkeeping:
+        for k in list(outputs_stream_dict.keys()):
+            outputs_stream_dict[f"inputs:{self.id}:{k}"] = outputs_stream_dict[k]
         outputs_stream_dict[f'inputs:{self.id}:dnc'] = framestate_dict['dnc']
         
         return outputs_stream_dict 

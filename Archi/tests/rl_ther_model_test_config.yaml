@@ -25,7 +25,7 @@ modules:
         non_linearities: [None]
         config: None
         input_stream_ids:
-                lstm_input: "modules:ConcatenationOperation:output"
+                lstm_input: "inputs:ConcatenationOperation:output"
                 #lstm_input: "inputs:Encoder:processed_input"
                 lstm_hidden: "inputs:CoreLSTM:hidden"
                 lstm_cell: "inputs:CoreLSTM:cell"

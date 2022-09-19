@@ -38,21 +38,39 @@ def test_model_forward():
     model = load_model(config)
     
     import torch 
+    
+    batch_size = 4
+    use_cuda = True 
 
     inputs_dict = {
-        'x':torch.rand(4,3,64,64),
+        'obs':torch.rand(batch_size,3,64,64),
+        'rnn_states':{
+            **model.get_reset_states({"repeat":batch_size, "cuda":use_cuda}),
+        },
     }
 
-    output = model(**inputs_dict)
-    assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
-    output1 = model(**inputs_dict)
+    prediction = model(**inputs_dict)
+    output = model.output_stream_dict
 
-    assert 'lstm_output' in output['modules']['CoreLSTM']
-    assert 'processed_input' in output['modules']['Encoder']
-    assert 'processed_input' in output['modules']['ToGateFCN']
+    assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
+    
+    inputs_dict1 = {
+        'obs':torch.rand(batch_size,3,64,64),
+        'rnn_states':{
+            **output['inputs'],
+        },
+    }
+    
+    prediction1 = model(**inputs_dict1)
+    output1 = model.output_stream_dict
+
+    assert 'lstm_output' in output['inputs']['CoreLSTM']
+    assert 'processed_input' in output['inputs']['Encoder']
+    assert 'processed_input' in output['inputs']['ToGateFCN']
     assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
     assert output1['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() != 0.0    
     assert len(dict(model.named_parameters())) != 0
+    
     for np, p in model.named_parameters():
         print(np)
 
