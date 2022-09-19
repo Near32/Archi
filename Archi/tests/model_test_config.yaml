@@ -72,6 +72,6 @@ modules:
                 use_cuda: True
 
 pipelines:
-        trunk: ['ConvNetModule_0', 'FCNModule_0']
+        torso : ['ConvNetModule_0', 'FCNModule_0']
         head: ['CoreLSTM', 'SecondaryDNC']
 

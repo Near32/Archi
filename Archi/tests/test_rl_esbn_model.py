@@ -40,11 +40,17 @@ def test_model_forward():
     model = load_model(config)
     
     import torch 
+    
+    batch_size = 4
+    use_cuda = False
 
     inputs_dict = {
-        'obs':torch.rand(4,3,64,64),
+        'obs':torch.rand(batch_size,3,64,64),
         'action': torch.randint(0,8,size=(4,1)),
-        'rnn_states':{'legal_actions': [torch.rand(4,8)]},
+        'rnn_states':{
+            'legal_actions': [torch.rand(4,8)],
+            **model.get_reset_states({"repeat":batch_size, "cuda":use_cuda}),
+        },
     }
 
     prediction = model(**inputs_dict)
@@ -61,7 +67,17 @@ def test_model_forward():
 
     output = model.output_stream_dict
     assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
-    prediction1 = model(**inputs_dict)
+
+    inputs_dict1 = {
+        'obs':torch.rand(batch_size,3,64,64),
+        'action': torch.randint(0,8,size=(4,1)),
+        'rnn_states':{
+            'legal_actions': [torch.rand(4,8)],
+            **output['inputs'],
+        },
+    }
+
+    prediction1 = model(**inputs_dict1)
     output1 = model.output_stream_dict
 
     assert 'lstm_output' in output['modules']['CoreLSTM']

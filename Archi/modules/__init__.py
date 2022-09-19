@@ -4,6 +4,7 @@ from .utils import load_module
 from .fully_connected_network_module import FullyConnectedNetworkModule
 from .convolutional_network_module import ConvolutionalNetworkModule
 from .recurrent_network_module import LSTMModule, GRUModule
+from .recurrent_network_module import EmbeddingRNNModule, CaptionRNNModule 
 from .differentiable_neural_computer_module import DNCModule
 from .key_value_memory_module import KeyValueMemoryModule
 from .RL_categorical_head_module import RLCategoricalHeadModule

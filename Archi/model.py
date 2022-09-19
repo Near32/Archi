@@ -46,7 +46,7 @@ class Model(Module):
         
         self.reset()
    
-    def get_reset_states(self, kwargs):
+    def get_reset_states(self, kwargs={}):
         """
         Provide a reset state without changing the current state.
         """
@@ -155,10 +155,14 @@ class Model(Module):
         rnn_states: Optional[Dict[str,object]]=None, 
         goal: Optional=None, 
         pipelines: Optional[Dict[str,List]]=None,
-        return_features: Optional[bool]=False):
+        return_features: Optional[bool]=False,
+        ):
         assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
         if pipelines is None:
-            pipelines = self.pipelines
+            pipelines = {
+                'torso':self.pipelines['torso'],
+                'head':self.pipelines['head'],
+            }
 
         batch_size = obs.shape[0]
        

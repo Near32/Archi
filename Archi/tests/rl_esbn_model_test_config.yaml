@@ -109,6 +109,6 @@ output_mappings:
         "log_a" : "modules:RLHead:log_a"
 
 pipelines:
-        trunk: ['Encoder',]
+        torso : ['Encoder',]
         head: ['CoreLSTM', 'ToGateFCN', 'ToKeyFCN', 'ToOutputFCN', 'KeyValueMemory', 'RLHead']
 

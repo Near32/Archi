@@ -396,6 +396,8 @@ class ConvolutionalNetworkModule(Module):
         """
         Operates on inputs_dict that is made up of referents to the available stream.
         Make sure that accesses to its element are non-destructive.
+        
+        WARNING: Experiences can be of shape [batch_size (x temporal_dim), depth_dim, h,w].
 
         :param input_streams_dict: dict of str and data elements that 
             follows `self.input_stream_ids`'s keywords and are extracted 
@@ -416,11 +418,23 @@ class ConvolutionalNetworkModule(Module):
                 experiences = experiences[0]
             batch_size = experiences.size(0)
 
-            #experiences = experiences.view(batch_size, -1)
+            original_shape = experiences.shape
+            if len(original_shape)>4:
+                temporal_dim = original_shape[1]
+                experiences = experiences.view(batch_size*temporal_dim, *original_shape[2:])
+            
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.forward(experiences)
-            outputs_stream_dict[output_key] = features
+
+            if len(original_shape)>4:
+                features = features.reshape(
+                    batch_size,
+                    temporal_dim,
+                    *features.shape[1:],
+                )
+
+            outputs_stream_dict[output_key] = [features]
             
         return outputs_stream_dict 
 

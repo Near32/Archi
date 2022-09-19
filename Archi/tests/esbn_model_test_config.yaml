@@ -88,6 +88,6 @@ modules:
                 use_cuda: True
 
 pipelines:
-        trunk: ['Encoder',]
+        torso: ['Encoder',]
         head: ['CoreLSTM', 'ToGateFCN', 'ToKeyFCN', 'ToOutputFCN', 'KeyValueMemory']
 
