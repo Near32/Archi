@@ -380,7 +380,7 @@ class ConvolutionalNetworkModule(Module):
     def forward(self, x, non_lin_output=False):
         self.features_map = self._compute_feat_map(x)
 
-        features = self.features_map.view(self.features_map.size(0), -1)
+        features = self.features_map.reshape(self.features_map.shape[0], -1)
         
         if self.fcs is not None:
             for idx, fc in enumerate(self.fcs):

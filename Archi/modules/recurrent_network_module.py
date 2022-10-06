@@ -7,6 +7,8 @@ import torch.nn.functional as F
 from Archi.modules.module import Module 
 from Archi.modules.utils import layer_init
 
+import wandb
+
     
 class LSTMModule(Module):
     def __init__(
@@ -394,8 +396,16 @@ class CaptionRNNModule(Module):
                 raise NotImplementedError
         
         self.input_dim = input_dim
-        self.input_decoder = nn.Linear(self.input_dim, self.hidden_units)
-
+        self.input_decoder = nn.Sequential(
+            layer_init(nn.Linear(self.input_dim, self.hidden_units)),
+            nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
+            nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
+        )
+        
         self.rnn_fn = rnn_fn
         self.rnn = rnn_fn(
             input_size=self.embedding_size,
@@ -406,8 +416,15 @@ class CaptionRNNModule(Module):
             bidirectional=False,
         )
         self.embedding = nn.Embedding(self.voc_size, self.embedding_size, padding_idx=0)
-        self.token_decoder = nn.Linear(self.hidden_units, self.voc_size)
-        
+        self.token_decoder = nn.Sequential(
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
+            nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
+            nn.ReLU(),
+            nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.voc_size)),
+        )
 
         self.criterion = nn.CrossEntropyLoss(reduction='none')
         
@@ -421,7 +438,7 @@ class CaptionRNNModule(Module):
         then teacher forcing is implemented...
         '''
         if gt_sentences is not None:
-            gt_sentences = gt_sentences.to(x.device)
+            gt_sentences = gt_sentences.long().to(x.device)
         
         batch_size = x.shape[0]
         # POSSIBLE TEMPORAL DIM ...
@@ -441,31 +458,38 @@ class CaptionRNNModule(Module):
         else:
             decoder_hidden = h_0 
         
-        decoder_input = self.embedding(torch.LongTensor([self.w2idx["SoS"]]*batch_size).to(x.device)).unsqueeze(1)
+        decoder_input = self.embedding(torch.LongTensor([[self.w2idx["SoS"]]]).to(x.device))
+        # 1 x embedding_size
+        decoder_input = decoder_input.reshape(1, 1, -1).repeat(batch_size, 1, 1)
         # batch_size x 1 x embedding_size
 
         loss_per_item = []
 
-        predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, 1, dtype=torch.long).to(x.device)
+        predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
         for t in range(self.max_sentence_length):
             output, decoder_hidden = self._rnn(decoder_input, h_c=decoder_hidden)
             token_distribution = F.softmax(self.token_decoder(output), dim=-1) 
             idxs_next_token = torch.argmax(token_distribution, dim=1)
             # batch_size x 1
-            predicted_sentences[:, t] = idxs_next_token.unsqueeze(-1)
+            predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
             
             # Compute loss:
             if gt_sentences is not None:
                 mask = (gt_sentences[:, t]!=self.w2idx['PAD']).float().to(x.device)
                 # batch_size x 1
-                batched_loss = self.criterion(token_distribution, gt_sentences[:, t].squeeze(-1))*mask
+                batched_loss = self.criterion(
+                    input=token_distribution, 
+                    target=gt_sentences[:, t].reshape(batch_size),
+                )
+                batched_loss *= mask
                 loss_per_item.append(batched_loss.unsqueeze(1))
                 
             # Preparing next step:
             if gt_sentences is not None:
+                # Teacher forcing:
                 idxs_next_token = gt_sentences[:, t]
             # batch_size x 1
-            decoder_input = self.embedding(idxs_next_token) #.unsqueeze(1)
+            decoder_input = self.embedding(idxs_next_token).unsqueeze(1)
             # batch_size x 1 x embedding_size            
         
         for b in range(batch_size):
@@ -474,7 +498,7 @@ class CaptionRNNModule(Module):
                 if predicted_sentences[b,idx_t] == self.w2idx['EoS']:
                     break
                 end_idx += 1
-
+        
         if gt_sentences is not None:
             loss_per_item = torch.cat(loss_per_item, dim=-1).mean(-1)
             # batch_size x max_sentence_length
@@ -545,8 +569,7 @@ class CaptionRNNModule(Module):
             outputs_stream_dict[output_key] = [output_sentences]
             
             for okey, ovalue in output_dict.items():
-                if 'prediction' in okey: continue
-                outputs_stream_dict[f"{key}_{okey}"] = [ovalue]
+                outputs_stream_dict[f"inputs:{key}_{okey}"] = [ovalue]
         
         return outputs_stream_dict 
 
@@ -630,7 +653,7 @@ class EmbeddingRNNModule(Module):
         sentence_length = x.shape[1]
         
         if x.shape[-1] == 1:    x = x.squeeze(-1)
-        embeddings = self.embedding(x)
+        embeddings = self.embedding(x.long())
         # batch_size x sequence_length x embedding_size
 
         rnn_outputs, rnn_states = self.rnn(embeddings)

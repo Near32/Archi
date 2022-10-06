@@ -130,9 +130,11 @@ class Model(Module):
         self.stream_handler.reset("losses_dict")
         self.stream_handler.reset("signals")
         
-        for inp, out in self.config["input_mappings"].items():
-            inp_v = self.stream_handler[inp]
-            self.stream_handler.update(out, inp_v)
+        for pipe_id in pipelines.keys():
+            if pipe_id not in self.config["input_mappings"].keys(): continue
+            for inp, out in self.config["input_mappings"][pipe_id].items():
+                inp_v = self.stream_handler[inp]
+                self.stream_handler.update(out, inp_v)
 
         self.stream_handler.start_recording_new_entries()
 
@@ -156,6 +158,7 @@ class Model(Module):
         goal: Optional=None, 
         pipelines: Optional[Dict[str,List]]=None,
         return_features: Optional[bool]=False,
+        return_feature_only: Optional[str]=None, 
         ):
         assert goal is None, "Deprecated goal-oriented usage ; please use frame/rnn_states."
         if pipelines is None:
@@ -176,7 +179,7 @@ class Model(Module):
 	)
         
         id2output = {
-            "a":"outputs:action",
+            "a":"outputs:a",
             "ent":"outputs:ent",
             "qa":"outputs:qa",
             "log_a":"outputs:log_a",
@@ -199,11 +202,24 @@ class Model(Module):
             'next_rnn_states': next_rnn_states
         })
         
-        if return_features:
-            features = self.stream_handler[self.config["features_id"]]
+        if return_features \
+        or return_feature_only is not None:
+            features_id = []
+            list_pipeline_keys2features = list(self.config["features_id"].keys())
+            for pipe_id in pipelines.keys():
+                if pipe_id in list_pipeline_keys2features:
+                    features_id.append(self.config["features_id"][pipe_id])
+            if return_feature_only is not None:
+                if return_feature_only not in features_id:  features_id.append(return_feature_only)
+            
+            assert len(features_id) == 1
+            features = self.stream_handler[features_id[0]]
+
             if isinstance(features, list):
                 assert len(features) == 1
                 features = features[0]
+            if return_feature_only is not None:
+                return features
             return features, prediction
 
         return prediction
