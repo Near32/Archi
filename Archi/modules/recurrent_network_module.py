@@ -343,6 +343,7 @@ class CaptionRNNModule(Module):
         gate=None, #F.relu, 
         dropout=0.0, 
         rnn_fn="nn.GRU",
+        predict_PADs=False,
         id='CaptionRNNModule_0',
         config=None,
         input_stream_ids=None,
@@ -374,7 +375,9 @@ class CaptionRNNModule(Module):
         
         while len(self.vocabulary) < self.vocab_size:
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
-
+        self.vocabulary = list(set(self.vocabulary))
+        
+        self.predict_PADs = predict_PADs
         self.w2idx = {}
         self.idx2w = {}
         for idx, w in enumerate(self.vocabulary):
@@ -397,13 +400,17 @@ class CaptionRNNModule(Module):
         
         self.input_dim = input_dim
         self.input_decoder = nn.Sequential(
-            layer_init(nn.Linear(self.input_dim, self.hidden_units)),
-            nn.ReLU(),
+            layer_init(nn.Linear(self.input_dim, self.hidden_units, bias=False)),
             nn.BatchNorm1d(self.hidden_units),
-            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
             nn.ReLU(),
+            #nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units, bias=False)),
             nn.BatchNorm1d(self.hidden_units),
-            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
+            nn.ReLU(),
+            #nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units, )), #bias=False)),
+            #nn.ReLU(),
+            #nn.BatchNorm1d(self.hidden_units),
         )
         
         self.rnn_fn = rnn_fn
@@ -417,13 +424,17 @@ class CaptionRNNModule(Module):
         )
         self.embedding = nn.Embedding(self.voc_size, self.embedding_size, padding_idx=0)
         self.token_decoder = nn.Sequential(
-            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
-            nn.ReLU(),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units, bias=False)),
             nn.BatchNorm1d(self.hidden_units),
-            layer_init(nn.Linear(self.hidden_units, self.hidden_units)),
             nn.ReLU(),
+            #nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.hidden_units, bias=False)),
             nn.BatchNorm1d(self.hidden_units),
-            layer_init(nn.Linear(self.hidden_units, self.voc_size)),
+            nn.ReLU(),
+            #nn.BatchNorm1d(self.hidden_units),
+            layer_init(nn.Linear(self.hidden_units, self.voc_size, )), #bias=False)),
+            #nn.ReLU(),
+            #nn.BatchNorm1d(self.voc_size),
         )
 
         self.criterion = nn.CrossEntropyLoss(reduction='none')
@@ -475,7 +486,10 @@ class CaptionRNNModule(Module):
             
             # Compute loss:
             if gt_sentences is not None:
-                mask = (gt_sentences[:, t]!=self.w2idx['PAD']).float().to(x.device)
+                mask = torch.ones_like(gt_sentences[:, t])
+                if not self.predict_PADs:
+                    mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
+                mask = mask.float().to(x.device)
                 # batch_size x 1
                 batched_loss = self.criterion(
                     input=token_distribution, 
@@ -492,17 +506,28 @@ class CaptionRNNModule(Module):
             decoder_input = self.embedding(idxs_next_token).unsqueeze(1)
             # batch_size x 1 x embedding_size            
         
+        # Regularize tokens after EoS :
+        EoS_count = 0
         for b in range(batch_size):
             end_idx = 0
             for idx_t in range(predicted_sentences.shape[1]):
                 if predicted_sentences[b,idx_t] == self.w2idx['EoS']:
+                    EoS_count += 1
+                    #if not self.predict_PADs:
+                    # Whether we predict the PAD tokens or not, 
+                    # we still want the output of this module to make 
+                    # sense with respect to the EoS token so we filter out
+                    # any token that follows EoS token...
+                    predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
                     break
                 end_idx += 1
-        
+        wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
+
         if gt_sentences is not None:
             loss_per_item = torch.cat(loss_per_item, dim=-1).mean(-1)
             # batch_size x max_sentence_length
             accuracies = (predicted_sentences==gt_sentences).float().mean(dim=0)
+            # Computing accuracy on the tokens that matters the most:
             mask = (gt_sentences!=self.w2idx['PAD'])
             sentence_accuracies = (predicted_sentences==gt_sentences).float().masked_select(mask).mean()
             output_dict = {
@@ -512,6 +537,23 @@ class CaptionRNNModule(Module):
                 'sentence_accuracies':sentence_accuracies
             }
 
+            """
+            # Logging:
+            columns = [f"token{idx}" for idx in range(predicted_sentences.shape[1])]
+            columns += [f"gt_token{idx}" for idx in range(gt_sentences.shape[1])]
+            columns += ["loss", "full_sentence", "gt_full_sentence"]
+            text_table = wandb.Table(columns=columns)
+            for bidx in range(mask.shape[0]):
+                word_sentence = [self.idx2w[token.item()] for token in predicted_sentences[bidx]]
+                gt_word_sentence = [self.idx2w[token.item()] for token in gt_sentences[bidx]] 
+                text_table.add_data(*[
+                    *word_sentence, 
+                    *gt_word_sentence,
+                    loss_per_item[bidx], 
+                    ]
+                )
+            wandb.log({f"{self.id}/SampleTable":sample_table}, commit=False)
+            """
             return output_dict
 
         return predicted_sentences
@@ -649,6 +691,10 @@ class EmbeddingRNNModule(Module):
             self = self.cuda()
 
     def forward(self, x):
+        if not hasattr(self, '_flattened'):
+            self.rnn.flatten_parameters()
+            setattr(self, '_flattened', True)
+
         batch_size = x.shape[0]
         sentence_length = x.shape[1]
         
