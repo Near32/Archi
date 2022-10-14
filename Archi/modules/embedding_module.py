@@ -53,7 +53,7 @@ class EmbeddingModule(Module):
         self.output = None
 
     def forward(self, x):
-        self.output = self.embed(x)
+        self.output = self.embed(x.long())
         return self.output
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
