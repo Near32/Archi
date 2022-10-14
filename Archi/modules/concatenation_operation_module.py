@@ -27,7 +27,7 @@ class ConcatenationOperationModule(Module):
         )
         
     def forward(self, **inputs):
-        output = torch.cat([v for k,v in inputs.items()], dim=self.config['dim'])
+        output = torch.cat([v.cuda() if self.config['use_cuda'] else v for k,v in inputs.items()], dim=self.config['dim'])
         return output
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :

@@ -53,7 +53,10 @@ class EmbeddingModule(Module):
         self.output = None
 
     def forward(self, x):
+        shape_len = len(x.shape)
         self.output = self.embed(x.long())
+        while len(self.output.shape)!=shape_len:
+            self.output = self.output.squeeze(1)
         return self.output
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
