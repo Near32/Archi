@@ -265,7 +265,7 @@ class ConvolutionalNetworkModule(Module):
                 self.cnn.append(layer)
                 # Update of the shape of the input-image, following Conv:
                 dim = (dim-k)//s+1
-                print(f"Dim: {dim}")
+                print(f"Dim: {cfg} x {dim} x {dim}")
             else:
                 add_non_lin = True
                 add_dp = (self.dropout > 0.0)
@@ -325,7 +325,7 @@ class ConvolutionalNetworkModule(Module):
                     self.cnn.append(self.non_linearities[idx]())
                 # Update of the shape of the input-image, following Conv:
                 dim = (dim-k+2*p)//s+1
-                print(f"Dim: {dim}")
+                print(f"Dim: {cfg} x {dim} x {dim}")
         
         if len(self.cnn):
             self.cnn = nn.Sequential(*self.cnn)
@@ -357,7 +357,7 @@ class ConvolutionalNetworkModule(Module):
                 if self.dropout:
                     self.fcs.append( nn.Dropout(p=self.dropout))
         else:
-            self.feature_dim = self.feat_map_dim*self.feat_map_dim*self.feat_map_depth
+            self.feature_dim = self.feat_map_depth
             self.fcs = None 
 
         self.use_cuda = use_cuda
@@ -380,9 +380,10 @@ class ConvolutionalNetworkModule(Module):
     def forward(self, x, non_lin_output=False):
         self.features_map = self._compute_feat_map(x)
 
-        features = self.features_map.reshape(self.features_map.shape[0], -1)
+        features = self.features_map
         
         if self.fcs is not None:
+            features = self.features_map.reshape(self.features_map.shape[0], -1)
             for idx, fc in enumerate(self.fcs):
                 features = fc(features)
                 if idx != len(self.fcs)-1 or non_lin_output:

@@ -4,6 +4,7 @@ from .utils import load_module
 from .fully_connected_network_module import FullyConnectedNetworkModule
 from .embedding_module import EmbeddingModule
 from .convolutional_network_module import ConvolutionalNetworkModule
+from .filmed_module import FiLMedModule
 from .recurrent_network_module import LSTMModule, GRUModule
 from .recurrent_network_module import EmbeddingRNNModule, CaptionRNNModule 
 from .differentiable_neural_computer_module import DNCModule

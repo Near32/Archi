@@ -6,7 +6,7 @@ from Archi.modules.utils import copy_hdict
 def test_model_loading():
     try:
         config = yaml.safe_load(
-            open("./rl_ther_model_test_config.yaml", 'r'),
+            open("./rl_filmed_ther_model_test_config.yaml", 'r'),
         )
     except yaml.YAMLError as e:
         print(e)
@@ -20,6 +20,8 @@ def test_model_loading():
     assert isinstance(model.modules['InstructionGenerator'], Archi.modules.CaptionRNNModule)
     assert 'CommEncoder' in model.modules.keys()
     assert isinstance(model.modules['CommEncoder'], Archi.modules.EmbeddingRNNModule)
+    assert 'FiLMedBlock1' in model.modules.keys()
+    assert 'FiLMedBlock2' in model.modules.keys()
     assert 'CoreLSTM' in model.modules.keys()
     assert 'CoreLSTM' in model.stream_handler.placeholders['inputs'].keys()
     assert 'hidden' in model.stream_handler.placeholders['inputs']['CoreLSTM'].keys()
@@ -30,7 +32,7 @@ def test_model_loading():
 def test_model_forward():
     try:
         config = yaml.safe_load(
-            open("./rl_ther_model_test_config.yaml", 'r'),
+            open("./rl_filmed_ther_model_test_config.yaml", 'r'),
         )
     except yaml.YAMLError as e:
         print(e)
@@ -126,6 +128,16 @@ def test_model_forward():
         },
     )
     output1 = model.output_stream_dict
+
+    print("Model's Predictions 1:")
+    for k,v in prediction1.items():
+        if isinstance(v, torch.Tensor):
+            print(f"{k} : {v.shape}")
+        elif isinstance(v, dict):
+            for k1,v1 in v.items():
+                print(f"{k}:{k1} : {type(v1)}")
+        else:
+            print(f"{k} : {type(v)}")
 
     assert 'lstm_output' in output['modules']['CoreLSTM']
     assert 'qa' in output['modules']['RLHead']

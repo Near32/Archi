@@ -521,8 +521,10 @@ class CaptionRNNModule(Module):
                     predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
                     break
                 end_idx += 1
-        wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
-
+        try:
+            wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
+        except Exception as e:
+            print(f"WARNING: W&B Logging: {e}")
         if gt_sentences is not None:
             loss_per_item = torch.cat(loss_per_item, dim=-1).mean(-1)
             # batch_size x max_sentence_length
@@ -537,23 +539,6 @@ class CaptionRNNModule(Module):
                 'sentence_accuracies':sentence_accuracies
             }
 
-            """
-            # Logging:
-            columns = [f"token{idx}" for idx in range(predicted_sentences.shape[1])]
-            columns += [f"gt_token{idx}" for idx in range(gt_sentences.shape[1])]
-            columns += ["loss", "full_sentence", "gt_full_sentence"]
-            text_table = wandb.Table(columns=columns)
-            for bidx in range(mask.shape[0]):
-                word_sentence = [self.idx2w[token.item()] for token in predicted_sentences[bidx]]
-                gt_word_sentence = [self.idx2w[token.item()] for token in gt_sentences[bidx]] 
-                text_table.add_data(*[
-                    *word_sentence, 
-                    *gt_word_sentence,
-                    loss_per_item[bidx], 
-                    ]
-                )
-            wandb.log({f"{self.id}/SampleTable":sample_table}, commit=False)
-            """
             return output_dict
 
         return predicted_sentences
