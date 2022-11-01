@@ -343,9 +343,11 @@ class CaptionRNNModule(Module):
         gate=None, #F.relu, 
         dropout=0.0, 
         rnn_fn="nn.GRU",
-        predict_PADs=False,
         id='CaptionRNNModule_0',
-        config=None,
+        config={
+            "predict_PADs":False,
+            "diversity_loss_weighting":False,
+        },
         input_stream_ids=None,
         output_stream_ids={},
         use_cuda=False,
@@ -377,7 +379,6 @@ class CaptionRNNModule(Module):
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
         self.vocabulary = list(set(self.vocabulary))
         
-        self.predict_PADs = predict_PADs
         self.w2idx = {}
         self.idx2w = {}
         for idx, w in enumerate(self.vocabulary):
@@ -487,10 +488,18 @@ class CaptionRNNModule(Module):
             # Compute loss:
             if gt_sentences is not None:
                 mask = torch.ones_like(gt_sentences[:, t])
-                if not self.predict_PADs:
+                if not self.config.get("predict_PADs", False):
                     mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
                 mask = mask.float().to(x.device)
                 # batch_size x 1
+                if self.config.get("diversity_loss_weighting", False):
+                    set_values = set(gt_sentences[:,t].cpu().tolist())
+                    nbr_div = len(set_values)
+                    mask *= max(1.0, nbr_div)
+                    try:
+                        wandb.log({f"{self.id}/DivPerBatchToken{t}": nbr_div}, commit=False)
+                    except Exception as e:
+                        print(f"WARNING: W&B Logging: {e}")
                 batched_loss = self.criterion(
                     input=token_distribution, 
                     target=gt_sentences[:, t].reshape(batch_size),

@@ -90,16 +90,16 @@ class FullyConnectedNetworkModule(Module):
             if isinstance(cfg, str) and 'BN' in cfg:
                 add_bn = True
                 cfg = int(cfg[2:])
-                dims[idx+1] = cfg
+                dims[idx] = cfg
                 # Assumes 'BNX' where X is an integer...
             elif isinstance(cfg, str) and 'LN' in cfg:
                 add_ln = True
                 cfg = int(cfg[2:])
-                dims[idx+1] = cfg
+                dims[idx] = cfg
                 # Assumes 'LNX' where X is an integer...
             elif isinstance(cfg, str):
                 cfg = int(cfg)
-                dims[idx+1] = cfg
+                dims[idx] = cfg
                 
             layer = nn.Linear(in_ch, cfg, bias=not(add_bn)) 
             layer = layer_init(layer, w_scale=math.sqrt(2))

@@ -295,16 +295,16 @@ class ConvolutionalNetworkModule(Module):
                 if isinstance(cfg, str) and 'BN' in cfg:
                     add_bn = True
                     cfg = int(cfg[2:])
-                    channels[idx+1] = cfg
+                    channels[idx] = cfg
                     # Assumes 'BNX' where X is an integer...
                 elif isinstance(cfg, str) and 'LN' in cfg:
                     add_ln = True
                     cfg = int(cfg[2:])
-                    channels[idx+1] = cfg
+                    channels[idx] = cfg
                     # Assumes 'LNX' where X is an integer...
                 elif isinstance(cfg, str):
                     cfg = int(cfg)
-                    channels[idx+1] = cfg
+                    channels[idx] = cfg
                     
                 layer = conv_fn(in_ch, cfg, kernel_size=k, stride=s, padding=p, bias=not(add_bn)) 
                 layer = layer_init(layer, w_scale=math.sqrt(2))
@@ -351,11 +351,27 @@ class ConvolutionalNetworkModule(Module):
             hidden_units = hidden_units + feature_dim
         
         if feature_dim != -1 or fc_hidden_units != []:
-            self.fcs = nn.ModuleList()
-            for nbr_in, nbr_out in zip(hidden_units, hidden_units[1:]):
+            self.fcs = [] #nn.ModuleList()
+            nbr_fclayers = len(hidden_units[1:])
+            for lidx, (nbr_in, nbr_out) in enumerate(zip(hidden_units, hidden_units[1:])):
+                add_bn = False
+                if isinstance(nbr_in, str) and 'BN' in nbr_in:
+                    cfg = int(nbr_in[2:])
+                    nbr_in = cfg
+                    # Assumes 'BNX' where X is an integer...
+                if isinstance(nbr_out, str) and 'BN' in nbr_out:
+                    add_bn = True
+                    cfg = int(nbr_out[2:])
+                    nbr_out = cfg
+                    # Assumes 'BNX' where X is an integer...
                 self.fcs.append( layer_init(nn.Linear(nbr_in, nbr_out), w_scale=math.sqrt(2)))
+                if add_bn:
+                    self.fcs.append(nn.BatchNorm1d(nbr_out))
+                if lidx != (nbr_fclayers-1):
+                    self.fcs.append(nn.ReLU())
                 if self.dropout:
                     self.fcs.append( nn.Dropout(p=self.dropout))
+            self.fcs = nn.Sequential(*self.fcs)
         else:
             self.feature_dim = self.feat_map_depth
             self.fcs = None 
@@ -384,11 +400,13 @@ class ConvolutionalNetworkModule(Module):
         
         if self.fcs is not None:
             features = self.features_map.reshape(self.features_map.shape[0], -1)
+            features = self.fcs(features)
+            '''
             for idx, fc in enumerate(self.fcs):
                 features = fc(features)
                 if idx != len(self.fcs)-1 or non_lin_output:
                     features = F.relu(features)
-
+            '''
         self.features = features 
 
         return features
