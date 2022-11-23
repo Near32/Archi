@@ -541,11 +541,23 @@ class CaptionRNNModule(Module):
             # Computing accuracy on the tokens that matters the most:
             mask = (gt_sentences!=self.w2idx['PAD'])
             sentence_accuracies = (predicted_sentences==gt_sentences).float().masked_select(mask).mean()
+            # BoS Accuracies:
+            bos_accuracies = torch.zeros_like(predicted_sentences).float()
+            for b in range(batch_size):
+                ps = predicted_sentences[b].cpu().detach().tolist()
+                for idx_t in range(predicted_sentences.shape[1]):
+                    gt_token = gt_sentences[b, idx_t].item()
+                    if gt_token in ps:
+                        bos_accuracies[b, idx_t] = 1.0
+            bos_sentence_accuracies = bos_accuracies.masked_select(mask).mean()
+            bos_accuracies = bos_accuracies.mean(dim=0)
             output_dict = {
                 'prediction':predicted_sentences, 
                 'loss_per_item':loss_per_item, 
                 'accuracies':accuracies, 
-                'sentence_accuracies':sentence_accuracies
+                'bos_accuracies':bos_accuracies, 
+                'sentence_accuracies':sentence_accuracies,
+                'bos_sentence_accuracies':bos_sentence_accuracies,
             }
 
             return output_dict
