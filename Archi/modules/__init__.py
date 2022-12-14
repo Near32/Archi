@@ -7,6 +7,7 @@ from .convolutional_network_module import ConvolutionalNetworkModule
 from .filmed_module import FiLMedModule
 from .recurrent_network_module import LSTMModule, GRUModule
 from .recurrent_network_module import EmbeddingRNNModule, CaptionRNNModule 
+from .recurrent_network_module import OracleTHERModule
 from .differentiable_neural_computer_module import DNCModule
 from .key_value_memory_module import KeyValueMemoryModule
 from .RL_categorical_head_module import RLCategoricalHeadModule

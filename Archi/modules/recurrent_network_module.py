@@ -330,6 +330,203 @@ class GRUModule(Module):
         return self.feature_dim
 
 
+class OracleTHERModule(Module):
+    def __init__(
+        self,
+        max_sentence_length,
+        vocabulary=None,
+        vocab_size=None,
+        id='OracleTHERModule_0',
+        config=None,
+        input_stream_ids=None,
+        output_stream_ids={},
+        use_cuda=False,
+    ):
+        super(OracleTHERModule, self).__init__(
+            id=id,
+            type="OracleTHERModule",
+            config=config,
+            input_stream_ids=input_stream_ids,
+            output_stream_ids=output_stream_ids,
+        )
+        
+        if vocabulary == 'None':
+            vocabulary = 'key ball red green blue purple \
+            yellow grey verydark dark neutral light verylight \
+            tiny small medium large giant get go fetch go get \
+            a fetch a you must fetch a'
+
+        if isinstance(vocabulary, str):
+            vocabulary = vocabulary.split(' ')
+        
+        self.vocabulary = set([w.lower() for w in vocabulary])
+        self.vocab_size = vocab_size
+        
+        # Make padding_idx=0:
+        self.vocabulary = ['PAD', 'SoS', 'EoS'] + list(self.vocabulary)
+        
+        while len(self.vocabulary) < self.vocab_size:
+            self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
+        self.vocabulary = list(set(self.vocabulary))
+        
+        self.w2idx = {}
+        self.idx2w = {}
+        for idx, w in enumerate(self.vocabulary):
+            self.w2idx[w] = idx
+            self.idx2w[idx] = w
+
+        self.max_sentence_length = max_sentence_length
+        self.voc_size = len(self.vocabulary)
+        
+        # Dummy weight to avoid optimizer complaints...
+        self.dummy = nn.Linear(1,1)
+        
+        self.use_cuda = use_cuda
+        if self.use_cuda:
+            self = self.cuda()
+    
+    def get_reset_states(self, cuda=False, repeat=1):
+        dummy_goal = torch.zeros((repeat, 1))
+        if cuda:    dummy_goal = dummy_goal.cuda()
+        return {'achieved_goal': [dummy_goal]}
+
+
+    def forward(self, x, gt_sentences=None):
+        '''
+        If :param gt_sentences: is not `None`,
+        then teacher forcing is implemented...
+        '''
+        if gt_sentences is not None:
+            gt_sentences = gt_sentences.long().to(x.device)
+        
+        batch_size = x.shape[0]
+        loss_per_item = []
+        
+        if x.shape[-1] == self.max_sentence_length:
+            predicted_sentences = x 
+        else:
+            predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+            predicted_sentences[:, 0] = self.w2idx['EoS']
+
+        for t in range(self.max_sentence_length):
+            #predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
+            
+            # Compute loss:
+            if gt_sentences is not None:
+                mask = torch.ones_like(gt_sentences[:, t])
+                mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
+                mask = mask.float().to(x.device)
+                # batch_size x 1
+                batched_loss = torch.zeros_like(mask)
+                batched_loss *= mask
+                loss_per_item.append(batched_loss.unsqueeze(1))
+                
+        # Regularize tokens after EoS :
+        EoS_count = 0
+        for b in range(batch_size):
+            end_idx = 0
+            for idx_t in range(predicted_sentences.shape[1]):
+                if predicted_sentences[b,idx_t] == self.w2idx['EoS']:
+                    EoS_count += 1
+                    #if not self.predict_PADs:
+                    # Whether we predict the PAD tokens or not, 
+                    # we still want the output of this module to make 
+                    # sense with respect to the EoS token so we filter out
+                    # any token that follows EoS token...
+                    predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
+                    break
+                end_idx += 1
+        try:
+            wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
+        except Exception as e:
+            print(f"WARNING: W&B Logging: {e}")
+        if gt_sentences is not None:
+            loss_per_item = torch.cat(loss_per_item, dim=-1).mean(-1)
+            # batch_size x max_sentence_length
+            accuracies = (predicted_sentences==gt_sentences).float().mean(dim=0)
+            # Computing accuracy on the tokens that matters the most:
+            mask = (gt_sentences!=self.w2idx['PAD'])
+            sentence_accuracies = (predicted_sentences==gt_sentences).float().masked_select(mask).mean()
+            # BoS Accuracies:
+            bos_accuracies = torch.zeros_like(predicted_sentences).float()
+            for b in range(batch_size):
+                ps = predicted_sentences[b].cpu().detach().tolist()
+                for idx_t in range(predicted_sentences.shape[1]):
+                    gt_token = gt_sentences[b, idx_t].item()
+                    if gt_token in ps:
+                        bos_accuracies[b, idx_t] = 1.0
+            bos_sentence_accuracies = bos_accuracies.masked_select(mask).mean()
+            bos_accuracies = bos_accuracies.mean(dim=0)
+            output_dict = {
+                'prediction':predicted_sentences, 
+                'loss_per_item':loss_per_item, 
+                'accuracies':accuracies, 
+                'bos_accuracies':bos_accuracies, 
+                'sentence_accuracies':sentence_accuracies,
+                'bos_sentence_accuracies':bos_sentence_accuracies,
+            }
+
+            return output_dict
+
+        return predicted_sentences
+
+    def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
+        """
+        Operates on inputs_dict that is made up of referents to the available stream.
+        Make sure that accesses to its element are non-destructive.
+
+        :param input_streams_dict: dict of str and data elements that 
+            follows `self.input_stream_ids`'s keywords and are extracted 
+            from `self.input_stream_keys`-named streams.
+
+        :returns:
+            - outputs_stream_dict: 
+        """
+        outputs_stream_dict = {}
+
+        for key, experiences in input_streams_dict.items():
+            if "gt_sentences" in key:   continue
+
+            output_key = f"processed_{key}"
+            if key in self.output_stream_ids:
+                output_key = self.output_stream_ids[key]
+            
+            if isinstance(experiences, list):
+                assert len(experiences)==1, f"Provided too many input on id:{key}"
+                experiences = experiences[0]
+            batch_size = experiences.size(0)
+
+            if self.use_cuda:   experiences = experiences.cuda()
+
+            # GT Sentences ?
+            gt_key = f"{key}_gt_sentences"
+            gt_sentences = input_streams_dict.get(gt_key, None)
+            
+            output_dict = {}
+            if gt_sentences is None:
+                output = self.forward(
+                    x=experiences,
+                    gt_sentences=gt_sentences,
+                )
+                output_dict['prediction'] = output
+            else:
+                if isinstance(gt_sentences, list):
+                    assert len(gt_sentences) == 1
+                    gt_sentences = gt_sentences[0]
+                output_dict = self.forward(
+                    x=experiences,
+                    gt_sentences=gt_sentences,
+                )
+            
+            output_sentences = output_dict['prediction']
+
+            outputs_stream_dict[output_key] = [output_sentences]
+            
+            for okey, ovalue in output_dict.items():
+                outputs_stream_dict[f"inputs:{key}_{okey}"] = [ovalue]
+        
+        return outputs_stream_dict 
+
 class CaptionRNNModule(Module):
     def __init__(
         self,
