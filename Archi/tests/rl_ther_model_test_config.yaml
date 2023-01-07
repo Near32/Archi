@@ -108,7 +108,9 @@ modules:
         gate: None #F.relu, 
         dropout: 0.0 
         rnn_fn: "GRU"
-        config: None
+        config:
+            predict_PADs: False
+            diversity_loss_weighting: False 
         input_stream_ids:
             input0: "inputs:ObsEncoder:processed_input"
             input0_gt_sentences: "inputs:gt_sentences"
