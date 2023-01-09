@@ -836,7 +836,7 @@ class CaptionRNNModule(Module):
 class EmbeddingRNNModule(Module):
     def __init__(
         self, 
-        voc_size, 
+        vocab_size, 
         feature_dim=64,
         embedding_size=64, 
         hidden_units=256, 
@@ -844,7 +844,7 @@ class EmbeddingRNNModule(Module):
         gate=None, #F.relu, 
         dropout=0.0, 
         rnn_fn="nn.GRU",
-        padding_idx=0,
+        padding_idx=None,
         id='EmbeddingRNNModule_0',
         config=None,
         input_stream_ids=None,
@@ -859,12 +859,14 @@ class EmbeddingRNNModule(Module):
             output_stream_ids=output_stream_ids,
         )
         
-        self.voc_size = voc_size
+        self.voc_size = vocab_size+1
         self.embedding_size = embedding_size
         if isinstance(hidden_units, list):  hidden_units=hidden_units[-1]
         self.hidden_units = hidden_units
         self.num_layers = num_layers
         
+        if padding_idx is None:
+            padding_idx = self.voc_size
         self.embedding = nn.Embedding(
             self.voc_size, 
             self.embedding_size, 
@@ -887,8 +889,11 @@ class EmbeddingRNNModule(Module):
         )
         
         self.feature_dim = feature_dim
-        self.decoder_mlp = nn.Linear(hidden_units, self.feature_dim)
-        
+        if isinstance(self.feature_dim, int):
+            self.decoder_mlp = nn.Linear(hidden_units, self.feature_dim)
+        else:
+            self.feature_dim = hidden_units
+
         self.use_cuda = use_cuda
         if self.use_cuda:
             self = self.cuda()
@@ -913,7 +918,8 @@ class EmbeddingRNNModule(Module):
         if self.gate != 'None':
             output = self.gate(output)
 
-        output = self.decoder_mlp(output)
+        if hasattr(self, 'decoder_mlp'):
+            output = self.decoder_mlp(output)
 
         # batch_size x hidden_units 
 
