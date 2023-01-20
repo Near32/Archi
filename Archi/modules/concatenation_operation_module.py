@@ -25,6 +25,14 @@ class ConcatenationOperationModule(Module):
             input_stream_ids=input_stream_ids,
             output_stream_ids=output_stream_ids,
         )
+    
+    def get_reset_states(self, cuda=False, repeat=1):
+        h = torch.zeros((repeat, self.config.get('output_dim',1)))
+        if cuda:
+            h = h.cuda()
+        output = [h]
+        return {'output': output}
+
         
     def forward(self, **inputs):
         output = torch.cat([v.cuda() if self.config['use_cuda'] else v for k,v in inputs.items()], dim=self.config['dim'])
@@ -43,8 +51,26 @@ class ConcatenationOperationModule(Module):
             - outputs_stream_dict: 
         """
         outputs_stream_dict = {}
+        
+        element_is_list = [isinstance(v,list) for v in input_streams_dict.values()]
+        list_size = None
+        if any(element_is_list):
+            for k,v in input_streams_dict.items():
+                if isinstance(v, list): 
+                    if list_size is None:
+                        list_size = len(v)
+                    else:
+                        assert list_size == len(v)
+                    continue
+                assert isinstance(v, torch.Tensor) 
+                input_streams_dict[k] = [v]
+                list_size = 1
+                if list_size is None:   
+                    list_size = 1
+                else:
+                    assert list_size == 1
 
-        if isinstance(list(input_streams_dict.values())[0], list):
+        if any(element_is_list):
             nbr_elements = len(list(input_streams_dict.values())[0])
             output_list = []
             for idx in range(nbr_elements):
@@ -53,7 +79,7 @@ class ConcatenationOperationModule(Module):
             outputs_stream_dict[f'output'] = output_list
         else:
             inputs = {k:v for k,v in input_streams_dict.items() if 'input' in k}
-            outputs_stream_dict[f'output'] = self.forward(**inputs)
+            outputs_stream_dict[f'output'] = [self.forward(**inputs)]
         
         for k in input_streams_dict.keys():
             if 'input' not in k:    continue

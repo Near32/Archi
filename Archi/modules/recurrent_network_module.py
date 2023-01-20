@@ -146,10 +146,10 @@ class LSTMModule(Module):
             }),
         )
         
-        outputs_stream_dict[f'lstm_output'] = lstm_output
+        outputs_stream_dict[f'output'] = [lstm_output]
         
-        outputs_stream_dict[f'lstm_hidden'] = state_dict['hidden']
-        outputs_stream_dict[f'lstm_cell'] = state_dict['cell']
+        outputs_stream_dict[f'hidden'] = state_dict['hidden']
+        outputs_stream_dict[f'cell'] = state_dict['cell']
         outputs_stream_dict[f'iteration'] = state_dict['iteration']
         
         for k in list(outputs_stream_dict.keys()):
@@ -157,6 +157,7 @@ class LSTMModule(Module):
                 outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict[k]
 
         # Bookkeeping:
+        outputs_stream_dict[f'inputs:{self.id}:output'] = [lstm_output]
         outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
         outputs_stream_dict[f'inputs:{self.id}:cell'] = state_dict['cell']
         outputs_stream_dict[f'inputs:{self.id}:iteration'] = state_dict['iteration']
@@ -299,9 +300,9 @@ class GRUModule(Module):
             }),
         )
         
-        outputs_stream_dict[f'gru_output'] = gru_output
+        outputs_stream_dict[f'output'] = gru_output
         
-        outputs_stream_dict[f'gru_hidden'] = state_dict['hidden']
+        outputs_stream_dict[f'hidden'] = state_dict['hidden']
         outputs_stream_dict[f'iteration'] = state_dict['iteration']
 
         for k in outputs_stream_dict.keys():
@@ -309,6 +310,7 @@ class GRUModule(Module):
                 outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict[k]
 
         # Bookkeeping:
+        outputs_stream_dict[f'inputs:{self.id}:output'] = gru_output
         outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
         outputs_stream_dict[f'inputs:{self.id}:iteration'] = state_dict['iteration']
 

@@ -116,6 +116,9 @@ class Model(Module):
             and isinstance(v, torch.Tensor):
                 batch_size = v.shape[0]
                 batch_size_set = True
+            if not isinstance(v, list)\
+            and isinstance(v, torch.Tensor):    
+                v = [v]
             self.stream_handler.update(f"inputs:{k}", v)
         # TODO: assert that the following lines are not necessary
         # since all the inputs that are part of the states should have
