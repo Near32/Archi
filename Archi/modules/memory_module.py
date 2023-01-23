@@ -61,7 +61,8 @@ class MemoryModule(Module):
         output_dict = {}
         
         batch_size = iteration[0].shape[0]
-        
+        element_dim = memory[0].shape[-1]
+
         # Write values in memory:
         # AT THE CORRECT INDEX, irrespective of the actual size of the memory,
         # but with respect to the iteration count:
@@ -81,10 +82,18 @@ class MemoryModule(Module):
             new_memory = new_memory.cuda()
         nbr_memory_items = new_memory.shape[-2]
 
-        while nbr_memory_items <= max_it:
-            new_memory = torch.cat([new_memory, torch.zeros_like(new_element).unsqueeze(1)], dim=1)
-            nbr_memory_items = new_memory.shape[-2]
-                    
+        new_memory = torch.cat([
+            new_memory, 
+            torch.zeros((
+                batch_size, 
+                max_it-nbr_memory_items+1, 
+                element_dim,
+            )).to(new_element.device),
+            ],
+            dim=1,
+        )
+        nbr_memory_items = new_memory.shape[-2]
+        
         new_memory.scatter_(
             dim=-2,
             index=iteration[0].long().unsqueeze(-1).repeat(1,1,new_element.shape[-1]).to(new_memory.device),

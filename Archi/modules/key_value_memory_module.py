@@ -81,7 +81,9 @@ class KeyValueMemoryModule(Module):
         output_dict = {}
         
         batch_size = iteration[0].shape[0]
-        
+        key_dim = key_memory[0].shape[-1]
+        value_dim = value_memory[0].shape[-1]
+
         # Masking memory: there can be more memory entry than the current iteration count for each batch element,
         # especially when mixing together batch elements at different timeline for update:
         nbr_memory_items = value_memory[0].shape[1]
@@ -157,16 +159,21 @@ class KeyValueMemoryModule(Module):
         max_it = iteration[0].long().max().item()
         new_key_memory = key_memory[0][:,:max_it,...].clone().to(gate.device)
         new_value_memory = value_memory[0][:,:max_it,...].clone().to(gate.device)
-        """
-        new_key_memory = key_memory[0].clone().to(gate.device)
-        new_value_memory = value_memory[0].clone().to(gate.device)
-        """
         nbr_memory_items = new_key_memory.shape[-2]
 
-        while nbr_memory_items <= max_it:
-            new_key_memory = torch.cat([new_key_memory, torch.zeros_like(new_key).unsqueeze(1)], dim=1)
-            new_value_memory = torch.cat([new_value_memory, torch.zeros_like(new_value).unsqueeze(1)], dim=1)
-            nbr_memory_items = new_key_memory.shape[-2]
+        new_key_memory = torch.cat([
+            new_key_memory, 
+            torch.zeros((batch_size, max_it-nbr_memory_items+1, key_dim)).to(gate.device),
+            ], 
+            dim=1,
+        )
+        new_value_memory = torch.cat([
+            new_value_memory, 
+            torch.zeros((batch_size, max_it-nbr_memory_items+1, value_dim)).to(gate.device),
+            ], 
+            dim=1,
+        )
+        nbr_memory_items = new_key_memory.shape[-2]
                     
         new_key_memory.scatter_(
             dim=-2,

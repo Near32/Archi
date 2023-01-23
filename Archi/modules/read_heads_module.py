@@ -97,13 +97,13 @@ class ReadHeadsModule(Module):
         if nbr_memory_items < self.top_k:
             value_memory[0] = torch.cat([
                 value_memory[0], 
-                torch.zeros((batch_size, self.top_k-nbr_memory_items+1, value_dim)).to(query.device),
+                torch.zeros((batch_size, self.top_k-nbr_memory_items, value_dim)).to(query.device),
                 ], 
                 dim=1,
             )
             key_memory[0] = torch.cat([
                 key_memory[0], 
-                torch.zeros((batch_size, self.top_k-nbr_memory_items+1, key_dim)).to(query.device),
+                torch.zeros((batch_size, self.top_k-nbr_memory_items, key_dim)).to(query.device),
                 ], 
                 dim=1, 
             )
