@@ -127,7 +127,7 @@ def test_model_forward():
     )
     output1 = model.output_stream_dict
 
-    assert 'lstm_output' in output['modules']['CoreLSTM']
+    assert 'output' in output['modules']['CoreLSTM']
     assert 'qa' in output['modules']['RLHead']
     assert 'ent' in output['modules']['RLHead']
     assert 'log_a' in output['modules']['RLHead']

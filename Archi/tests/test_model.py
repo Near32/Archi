@@ -68,7 +68,7 @@ def test_model_forward():
 
     assert 'processed_input' in output['inputs']['ConvNetModule_0']
     assert 'processed_input' in output['inputs']['FCNModule_0']
-    assert 'lstm_output' in output['inputs']['CoreLSTM']
+    assert 'output' in output['inputs']['CoreLSTM']
     assert 'dnc_output' in output['inputs']['SecondaryDNC']
     assert output1['inputs']['SecondaryDNC']['dnc']['dnc_body']['prev_read_vec'][0].max() != 0.0    
     assert len(dict(model.named_parameters())) != 0

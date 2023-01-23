@@ -24,7 +24,7 @@ modules:
                         lstm_cell: "inputs:CoreLSTM:cell"
                         iteration: "inputs:CoreLSTM:iteration"
                 output_stream_ids:
-                        lstm_output: "inputs:CoreLSTM:lstm_output"
+                        lstm_output: "inputs:CoreLSTM:output"
                 use_cuda: True
         
         'KeyValueMemory':
@@ -49,7 +49,7 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "inputs:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:output"
                 output_stream_ids:
                         input: "inputs:ToGateFCN:processed_input"
                 use_cuda: True
@@ -62,7 +62,7 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "inputs:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:output"
                 output_stream_ids:
                         input: "inputs:ToKeyFCN:processed_input"
                 use_cuda: True
@@ -75,7 +75,7 @@ modules:
                 dropout: 0.0
                 config: None
                 input_stream_ids:
-                        input: "inputs:CoreLSTM:lstm_output"
+                        input: "inputs:CoreLSTM:output"
                 output_stream_ids:
                         input: "inputs:ToOutputFCN:processed_input"
                 use_cuda: True

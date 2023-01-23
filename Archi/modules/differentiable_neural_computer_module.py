@@ -1118,7 +1118,7 @@ class DNCModule(Module) :
         """
         outputs_stream_dict = {}
         
-        dnc_input = input_streams_dict['dnc_input']
+        dnc_input = input_streams_dict['dnc_input'][0]
         dnc_framestate = input_streams_dict['dnc_framestate']
 
         dnc_output, framestate_dict = self.forward((

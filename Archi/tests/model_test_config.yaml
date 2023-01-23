@@ -21,7 +21,7 @@ modules:
                 discount_factor: 0.99
                 config: None
                 input_stream_ids:
-                        dnc_input: 'inputs:CoreLSTM:lstm_output'
+                        dnc_input: 'inputs:CoreLSTM:output'
                         #dnc_framestate: 'inputs:SecondaryDNC:dnc'
                 output_stream_ids:
                         dnc_output: "inputs:SecondaryDNC:dnc_output"
@@ -38,7 +38,7 @@ modules:
                         #lstm_cell: "inputs:CoreLSTM:cell"
                         #iteration: "inputs:CoreLSTM:iteration"
                 output_stream_ids:
-                        lstm_output: "inputs:CoreLSTM:lstm_output"
+                        lstm_output: "inputs:CoreLSTM:output"
                 use_cuda: True
 
         'FCNModule_0':

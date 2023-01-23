@@ -65,7 +65,7 @@ class MemoryModule(Module):
         # Write values in memory:
         # AT THE CORRECT INDEX, irrespective of the actual size of the memory,
         # but with respect to the iteration count:
-        iteration += 1
+        iteration[0] += 1
         # Because the iteration tensor is updated first,
         # the iteration count corresponds to the slot in which the new memory elements should be inserted:
         # check that the memory is big enough:
@@ -76,7 +76,9 @@ class MemoryModule(Module):
         let us resize the memory to fit the iteration needs:
         """
         max_it = iteration[0].long().max().item()
-        new_memory = memory[0][:,:max_it,...].clone().to(gate.device)
+        new_memory = memory[0][:,:max_it,...].clone()
+        if self.use_cuda:
+            new_memory = new_memory.cuda()
         nbr_memory_items = new_memory.shape[-2]
 
         while nbr_memory_items <= max_it:
@@ -85,13 +87,13 @@ class MemoryModule(Module):
                     
         new_memory.scatter_(
             dim=-2,
-            index=iteration[0].long().unsqueeze(-1).repeat(1,1,new_element.shape[-1]).to(gate.device),
+            index=iteration[0].long().unsqueeze(-1).repeat(1,1,new_element.shape[-1]).to(new_memory.device),
             src=new_element.unsqueeze(1),
         )
 
         outputs_dict = {
             'memory': [new_memory],
-            'iteration': [iteration],
+            'iteration': iteration,
         }
 
         return outputs_dict

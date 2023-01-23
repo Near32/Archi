@@ -33,7 +33,7 @@ modules:
                 lstm_cell: "inputs:CoreLSTM:cell"
                 iteration: "inputs:CoreLSTM:iteration"
         output_stream_ids:
-            lstm_output: "inputs:CoreLSTM:lstm_output"
+            lstm_output: "inputs:CoreLSTM:output"
         use_cuda: True
 
     'ObsEncoder':
@@ -106,7 +106,7 @@ modules:
     
     'CommEncoder':
         type: EmbeddingRNNModule 
-        voc_size: *vocab_size
+        vocab_size: *vocab_size
         feature_dim: *gru_feature_dim 
         embedding_size: *embedding_dim 
         hidden_units: *hidden_dim
@@ -130,7 +130,7 @@ modules:
         dueling: True
         config: None
         input_stream_ids: 
-            input0: "inputs:CoreLSTM:lstm_output"
+            input0: "inputs:CoreLSTM:output"
             input1: "inputs:critic_body:extra_inputs:previous_reward"
             input2: "inputs:critic_body:extra_inputs:previous_action"
             input8: "inputs:critic_body:extra_inputs:action_mask"

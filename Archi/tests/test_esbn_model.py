@@ -64,7 +64,7 @@ def test_model_forward():
     prediction1 = model(**inputs_dict1)
     output1 = model.output_stream_dict
 
-    assert 'lstm_output' in output['inputs']['CoreLSTM']
+    assert 'output' in output['inputs']['CoreLSTM']
     assert 'processed_input' in output['inputs']['Encoder']
     assert 'processed_input' in output['inputs']['ToGateFCN']
     assert output['inputs']['KeyValueMemory']['read_key_plus_conf'][0].max() == 0.0    
