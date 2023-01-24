@@ -49,8 +49,11 @@ class FullyConnectedNetworkModule(Module):
         self.non_linearities = non_linearities
         if not isinstance(non_linearities, list):
             self.non_linearities = [non_linearities]
-        while len(self.non_linearities) <= (len(dims) - 1):
+        if len(self.non_linearities) > (len(dims)-1):
+            raise ImplementationError(f"Design has too many non-linearities for {self.id}.")
+        while len(self.non_linearities) < (len(dims) - 1):
             self.non_linearities.append(self.non_linearities[0])
+        
         for idx, nl in enumerate(self.non_linearities):
             if nl=='None':
                 nl_cls = None
@@ -68,7 +71,7 @@ class FullyConnectedNetworkModule(Module):
             add_non_lin = True
             
             # No non-linearity on the output layer
-            if idx == len(dims)-2:  add_non_lin = False
+            #if idx == len(dims)-2:  add_non_lin = False
             
             add_dp = (self.dropout > 0.0)
             dropout = self.dropout
