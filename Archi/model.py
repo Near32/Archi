@@ -184,8 +184,10 @@ class Model(Module):
         id2output = {
             "a":"outputs:a",
             "ent":"outputs:ent",
+            "legal_ent":"outputs:legal_ent",
             "qa":"outputs:qa",
             "log_a":"outputs:log_a",
+            "unlegal_log_a":"outputs:unlegal_log_a",
         }
         
         prediction = {}
