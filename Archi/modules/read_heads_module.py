@@ -93,7 +93,9 @@ class ReadHeadsModule(Module):
         # Masking memory: there can be more memory entry than the current iteration count for each batch element,
         # especially when mixing together batch elements at different timeline for update:
         nbr_memory_items = value_memory[0].shape[1]
-
+        value_memory[0] = value_memory[0].to(query.device)
+        key_memory[0] = key_memory[0].to(query.device)
+        
         if nbr_memory_items < self.top_k:
             value_memory[0] = torch.cat([
                 value_memory[0], 
@@ -134,6 +136,8 @@ class ReadHeadsModule(Module):
             # (dim, n , value_dim)
 
             z = query[not_first_indices, ...]            
+            dim = z.shape[0]
+            
             # Similarities:
             #if self.normalization_fn == "softmax":
             #    sim = einsum('b n d, b d -> b n', km, z)
@@ -154,7 +158,7 @@ class ReadHeadsModule(Module):
                 input=vm,
                 dim=1,
                 index=topk_sim_indices.unsqueeze(2).expand(
-                    batch_size,
+                    dim,
                     self.top_k,
                     value_dim,
                 ),
@@ -194,13 +198,21 @@ class ReadHeadsModule(Module):
 
             new_read_element.scatter_(
                 dim=0,
-                index=not_first_indices.reshape((batch_size, 1, 1)).repeat(1, self.top_k, value_dim).to(query.device),
+                index=not_first_indices.reshape(
+                    (dim, 1, 1)
+                ).repeat(
+                    1, 
+                    self.top_k, 
+                    value_dim,
+                ).to(query.device),
                 src=new_read_value,
             )
 
-            if "sum" in self.postprocessing:
-                new_read_element = new_read_element.sum(dim=1)
-                # (batch_size, value_dim)
+        if "sum" in self.postprocessing:
+            new_read_element = new_read_element.sum(dim=1)
+            # (batch_size, value_dim)
+        else:
+            raise NotImplementedError
         
         outputs_dict = {
             'read_value': [new_read_element],
