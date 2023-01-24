@@ -116,12 +116,16 @@ class RLCategoricalHeadModule(Module):
         
         legal_probs = F.softmax( legal_qa, dim=-1 )
         legal_log_probs = torch.log(legal_probs+EPS)
-        
+        legal_entropy = -torch.sum(legal_provs*legal_log_probs, dim=-1)
+        # batch
+
         outputs_stream_dict = {
             'a': action,
             'ent': entropy,
+            'legal_ent': legal_entropy,
             'qa': qa,
             'log_a': legal_log_probs,
+            'unlegal_log_a': log_probs,
         }
         
         return outputs_stream_dict 
