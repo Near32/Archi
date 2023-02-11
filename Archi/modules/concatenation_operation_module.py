@@ -27,7 +27,12 @@ class ConcatenationOperationModule(Module):
         )
     
     def get_reset_states(self, cuda=False, repeat=1):
-        h = torch.zeros((repeat, self.config.get('output_dim',1)))
+        #h = torch.zeros((repeat, self.config.get('output_dim',1)))
+        # If the output_dim is not provided then, upon concatenation
+        # of experiences of a sequence_buffer of R2D2, the concat_fn
+        # finds elements of different shapes and must create a np.empty
+        # which is then impossible to regularise in the archi_concat_fn...
+        h = torch.zeros((repeat, self.config['output_dim']))
         if cuda:
             h = h.cuda()
         output = [h]
