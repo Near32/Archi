@@ -643,7 +643,7 @@ class CaptionRNNModule(Module):
         if self.use_cuda:
             self = self.cuda()
 
-    def forward(self, x, gt_sentences=None):
+    def forward(self, x, gt_sentences=None, output_dict=None):
         '''
         If :param gt_sentences: is not `None`,
         then teacher forcing is implemented...
@@ -677,10 +677,17 @@ class CaptionRNNModule(Module):
         loss_per_item = []
 
         predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+        predicted_logits = []
+        hidden_states = []
         for t in range(self.max_sentence_length):
             output, decoder_hidden = self._rnn(decoder_input, h_c=decoder_hidden)
-            token_distribution = F.softmax(self.token_decoder(output), dim=-1) 
-            idxs_next_token = torch.argmax(token_distribution, dim=1)
+            hidden_states.append(output)
+            #token_distribution = F.softmax(self.token_decoder(output), dim=-1) 
+            token_unlogit = self.token_decoder(output)
+            token_logit = F.log_softmax(token_unlogit, dim=-1) 
+            predicted_logits.append(token_logit)
+            #idxs_next_token = torch.argmax(token_distribution, dim=1)
+            idxs_next_token = torch.argmax(token_logit, dim=1)
             # batch_size x 1
             predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
             
@@ -700,7 +707,10 @@ class CaptionRNNModule(Module):
                     except Exception as e:
                         print(f"WARNING: W&B Logging: {e}")
                 batched_loss = self.criterion(
-                    input=token_distribution, 
+                    #input=token_distribution, 
+                    # With CrossEntropyLoss, it is expecting unnormalized logit,
+                    # and it will perform a log_softmax inside:
+                    input=token_unlogit, 
                     target=gt_sentences[:, t].reshape(batch_size),
                 )
                 batched_loss *= mask
@@ -714,6 +724,11 @@ class CaptionRNNModule(Module):
             decoder_input = self.embedding(idxs_next_token).unsqueeze(1)
             # batch_size x 1 x embedding_size            
         
+        predicted_logits = torch.stack(predicted_logits, dim=1)
+        # batch_size x max_sentence_length x vocab_size 
+        hidden_states = torch.stack(hidden_states, dim=1)
+        # batch_size x max_sentence_length x hidden_state_dim
+
         # Regularize tokens after EoS :
         EoS_count = 0
         for b in range(batch_size):
@@ -751,7 +766,9 @@ class CaptionRNNModule(Module):
             bos_sentence_accuracies = bos_accuracies.masked_select(mask).mean()
             bos_accuracies = bos_accuracies.mean(dim=0)
             output_dict = {
+                'hidden_states':hidden_states, 
                 'prediction':predicted_sentences, 
+                'prediction_logits':predicted_logits, 
                 'loss_per_item':loss_per_item, 
                 'accuracies':accuracies, 
                 'bos_accuracies':bos_accuracies, 
@@ -760,6 +777,13 @@ class CaptionRNNModule(Module):
             }
 
             return output_dict
+        
+        if output_dict is not None:
+            output_dict.update({
+                'hidden_states':hidden_states, 
+                'prediction':predicted_sentences, 
+                'prediction_logits':predicted_logits, 
+            })
 
         return predicted_sentences
 
@@ -800,6 +824,7 @@ class CaptionRNNModule(Module):
                 output = self.forward(
                     x=experiences,
                     gt_sentences=gt_sentences,
+                    output_dict=output_dict,
                 )
                 output_dict['prediction'] = output
             else:
@@ -816,7 +841,7 @@ class CaptionRNNModule(Module):
             outputs_stream_dict[output_key] = [output_sentences]
             
             for okey, ovalue in output_dict.items():
-                outputs_stream_dict[f"inputs:{key}_{okey}"] = [ovalue]
+                outputs_stream_dict[f"inputs:{self.id}:{key}_{okey}"] = [ovalue]
         
         return outputs_stream_dict 
 
