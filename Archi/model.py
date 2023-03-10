@@ -188,8 +188,14 @@ class Model(Module):
             "qa":"outputs:qa",
             "log_a":"outputs:log_a",
             "unlegal_log_a":"outputs:unlegal_log_a",
-        }
         
+            'greedy_action': 'outputs:greedy_action',
+            'v': 'outputs:v',
+            'int_v': 'outputs:int_v',
+            'log_pi_a': 'outputs:log_pi_a',
+            'legal_log_pi_a': 'outputs:legal_log_pi_a',
+        }
+
         prediction = {}
         for kid,key in id2output.items():
             if key in self.output_stream_dict:

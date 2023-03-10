@@ -13,5 +13,6 @@ from .key_value_memory_module import KeyValueMemoryModule
 from .memory_module import MemoryModule
 from .read_heads_module import ReadHeadsModule
 from .RL_categorical_head_module import RLCategoricalHeadModule
+from .RL_categorical_actor_critic_head_module import RLCategoricalActorCriticHeadModule
 from .concatenation_operation_module import ConcatenationOperationModule
 
