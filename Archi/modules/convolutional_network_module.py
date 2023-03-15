@@ -373,7 +373,7 @@ class ConvolutionalNetworkModule(Module):
                     self.fcs.append( nn.Dropout(p=self.dropout))
             self.fcs = nn.Sequential(*self.fcs)
         else:
-            self.feature_dim = self.feat_map_depth
+            self.feature_dim = (self.feat_map_dim**2)*self.feat_map_depth
             self.fcs = None 
 
         self.use_cuda = use_cuda
