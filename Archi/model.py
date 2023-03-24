@@ -149,8 +149,9 @@ class Model(Module):
 	# Output mapping:
         for k,v in self.config['output_mappings'].items():
             value = self.stream_handler[v] 
-            if value is not None:
-                new_streams_dict[f"outputs:{k}"] = value
+            if value is None:
+                raise NotImplementedError(f"Key {k} is not among Model's output.")
+            new_streams_dict[f"outputs:{k}"] = value
         
         return new_streams_dict
 

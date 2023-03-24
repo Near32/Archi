@@ -23,7 +23,10 @@ def layer_init(layer, w_scale=1.0, nonlinearity='relu', init_type=None):
         if param is None or param.data is None: continue
         if 'bias' in name:
             #layer._parameters[name].data.fill_(0.0)
-            layer._parameters[name].data.uniform_(-0.08,0.08)
+            if init_type=='ortho':
+                nn.init.constant_(layer._parameters[name].data, 0)
+            else:
+                layer._parameters[name].data.uniform_(-0.08,0.08)
         else:
             if init_type=='ortho':
                 nn.init.orthogonal_(layer._parameters[name].data)

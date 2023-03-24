@@ -48,10 +48,27 @@ class RLCategoricalActorCriticHeadModule(Module):
             if self.use_intrinsic_critic:
                 self.fc_int_critic = layer_fn(self.state_dim, 1)
             if layer_init_fn is not None:
-                self.fc_action = layer_init_fn(self.fc_action, 1e-3)
-                self.fc_ext_critic = layer_init_fn(self.fc_ext_critic, 1e0)
+                print(f'WARNING: using layer init fn : {layer_init_fn} in {self}')
+                self.fc_action = layer_init_fn(
+                    self.fc_action, 
+                    w_scale=1e-2,
+                    init_type='ortho',
+                )
+                self.fc_ext_critic = layer_init_fn(
+                    self.fc_ext_critic, 
+                    w_scale=1e0,
+                    init_type='ortho',
+                )
+
+                #self.fc_action = layer_init_fn(self.fc_action, 1e-3)
+                #self.fc_ext_critic = layer_init_fn(self.fc_ext_critic, 1e0)
                 if self.use_intrinsic_critic:
-                    self.fc_int_critic = layer_init_fn(self.fc_int_critic, 1e-3)
+                    self.fc_int_critic = layer_init_fn(
+                        self.fc_int_critic, 
+                        w_scale=1e0,
+                        init_type='ortho',
+                    )
+                    #self.fc_int_critic = layer_init_fn(self.fc_int_critic, 1e-3)
 
         self.feature_dim = self.action_dim
 
@@ -95,9 +112,14 @@ class RLCategoricalActorCriticHeadModule(Module):
         if self.use_cuda:   phi_features = phi_features.cuda()
         
         ext_v, int_v, action_logits = self.forward(phi_features)
+        
         probs = F.softmax(action_logits, dim=-1)
-        #log_probs = F.log_softmax(action_logit, dim=-1)
-        log_probs = action_logits
+        log_probs = F.log_softmax(action_logits, dim=-1)
+        # POSSIBLE Now : like in regym's head :
+        #log_probs = torch.log(probs+1.0e-8)
+
+        # The following leads to very different legal_ent and ent:
+        # log_probs = action_logits
         entropy = -torch.sum(probs*log_probs, dim=-1)
         # batch
 
@@ -111,16 +133,15 @@ class RLCategoricalActorCriticHeadModule(Module):
         legal_qa = (1+action_logits-action_logits.min(dim=-1, keepdim=True)[0]) * legal_actions
         
         greedy_action = legal_qa.max(dim=-1, keepdim=True)[1]
-        action = None
-        #if 'action' in input_streams_dict:
-        #    action = input_streams_dict['action']
-        #    if isinstance(action, list):    action = action[0]
+        if 'action' in input_streams_dict:
+            action = input_streams_dict['action']
+            if isinstance(action, list):    action = action[0]
         if action is None:
             if self.greedy:
                 action  = legal_qa.max(dim=-1, keepdim=True)[1]
             else:
                 action = torch.multinomial(legal_qa.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
-            # batch #x 1
+        # batch #x 1
         
         #log_probs = torch.log(probs+EPS)
         log_probs = log_probs.gather(1, action).squeeze(1)
