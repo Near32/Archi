@@ -114,9 +114,9 @@ class RLCategoricalActorCriticHeadModule(Module):
         ext_v, int_v, action_logits = self.forward(phi_features)
         
         probs = F.softmax(action_logits, dim=-1)
-        log_probs = F.log_softmax(action_logits, dim=-1)
+        # PREVIOUSLY: log_probs = F.log_softmax(action_logits, dim=-1)
         # POSSIBLE Now : like in regym's head :
-        #log_probs = torch.log(probs+1.0e-8)
+        log_probs = torch.log(probs+1.0e-8)
 
         # The following leads to very different legal_ent and ent:
         # log_probs = action_logits
