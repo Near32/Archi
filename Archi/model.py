@@ -146,8 +146,13 @@ class Model(Module):
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
 
-	# Output mapping:
-        for k,v in self.config['output_mappings'].items():
+	    # Output mapping:
+        relevant_output_mappings = {}
+        for om_pipeline, om_d in self.config['output_mappings'].items():
+            if om_pipeline not in pipelines:    continue
+            relevant_output_mappings.update(om_d)
+
+        for k,v in relevant_output_mappings.items():
             value = self.stream_handler[v] 
             if value is None:
                 raise NotImplementedError(f"Key {k} is not among Model's output.")
