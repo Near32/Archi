@@ -546,6 +546,8 @@ class CaptionRNNModule(Module):
         config={
             "predict_PADs":False,
             "diversity_loss_weighting":False,
+            "rectify_contrastive_imbalance":False,
+            "semantic_embeddings_prior":False,
         },
         input_stream_ids=None,
         output_stream_ids={},
@@ -622,7 +624,9 @@ class CaptionRNNModule(Module):
             dropout=dropout,
             bidirectional=False,
         )
-        self.embedding = nn.Embedding(self.voc_size, self.embedding_size, padding_idx=0)
+        
+        #self.embedding = nn.Embedding(self.voc_size, self.embedding_size, padding_idx=0)
+        self.embedding = nn.Embedding(self.voc_size, self.embedding_size)
         self.token_decoder = nn.Sequential(
             layer_init(nn.Linear(self.hidden_units, self.hidden_units, bias=False)),
             nn.BatchNorm1d(self.hidden_units),
@@ -637,12 +641,22 @@ class CaptionRNNModule(Module):
             #nn.BatchNorm1d(self.voc_size),
         )
 
+        if self.config.get("semantic_embeddings_prior", False):
+            self.semantic_embedding = nn.Embedding(self.voc_size, self.embedding_size)
+            self.mm_size = self.hidden_units
+            self.sem2mm = nn.Linear(self.embedding_size, self.mm_size, bias=False)
+            self.input2mm = nn.Linear(self.input_dim, self.mm_size, bias=False)
+
         self.criterion = nn.CrossEntropyLoss(reduction='none')
         
         self.use_cuda = use_cuda
         if self.use_cuda:
             self = self.cuda()
 
+    def reset(self):
+        if self.config.get("semantic_embeddings_prior", False):
+            self.semantic_prior = None
+    
     def forward(self, x, gt_sentences=None, output_dict=None):
         '''
         If :param gt_sentences: is not `None`,
@@ -654,6 +668,26 @@ class CaptionRNNModule(Module):
         batch_size = x.shape[0]
         # POSSIBLE TEMPORAL DIM ...
         x = x.reshape(batch_size, -1)
+        
+        if self.config.get("semantic_embeddings_prior", False):
+            mm_x = self.input2mm(x)
+            l2_mm_x = F.normalize(mm_x, p=2.0, dim=-1).unsqueeze(-1)
+            # (batch_size x mm_size x 1)
+            # Must be clone for it to be differentiable apparently...
+            b_sem_emb = self.semantic_embedding.weight.clone().unsqueeze(0).repeat(batch_size, 1,1)
+            # (batch_size x vocab_size x emb_size )
+            mm_sem_emb = self.sem2mm(b_sem_emb)
+            l2_mm_sem_emb = F.normalize(mm_sem_emb, p=2.0, dim=-1)
+            # (batch_size x vocab_size x mm_size)
+            prior = torch.softmax(
+                torch.bmm(l2_mm_sem_emb, l2_mm_x).squeeze(-1),
+                dim=-1,
+            )
+            # (batch_size x vocab_size)
+            self.semantic_prior = prior
+        else:
+            prior = None
+            self.semantic_prior = None
 
         # Input Decoding:
         dx = self.input_decoder(x)
@@ -673,6 +707,18 @@ class CaptionRNNModule(Module):
         # 1 x embedding_size
         decoder_input = decoder_input.reshape(1, 1, -1).repeat(batch_size, 1, 1)
         # batch_size x 1 x embedding_size
+        
+        # Compute Contrastive Factors:
+        if gt_sentences is not None \
+        and self.config.get("rectify_contrastive_imbalance", False):
+            # Negative examples :
+            negative_mask = (gt_sentences[:,0] == self.w2idx["EoS"])
+            # (batch_size, )
+            nbr_negatives = negative_mask.sum().item()
+            # Positive examples
+            positive_mask = (1-negative_mask.float())
+            # (batch_size, )
+            nbr_positives = batch_size-nbr_negatives
 
         loss_per_item = []
 
@@ -684,7 +730,14 @@ class CaptionRNNModule(Module):
             hidden_states.append(output)
             #token_distribution = F.softmax(self.token_decoder(output), dim=-1) 
             token_unlogit = self.token_decoder(output)
-            token_logit = F.log_softmax(token_unlogit, dim=-1) 
+            
+            if prior is None:
+                token_logit = F.log_softmax(token_unlogit, dim=-1) 
+            else:
+                token_distr = torch.softmax(token_unlogit, dim=-1)
+                eff_token_distr = (prior+token_distr)/2.0
+                token_logit = torch.log(eff_token_distr+1.0e-8)
+
             predicted_logits.append(token_logit)
             #idxs_next_token = torch.argmax(token_distribution, dim=1)
             idxs_next_token = torch.argmax(token_logit, dim=1)
@@ -714,6 +767,12 @@ class CaptionRNNModule(Module):
                     target=gt_sentences[:, t].reshape(batch_size),
                 )
                 batched_loss *= mask
+                if self.config.get("rectify_contrastive_imbalance", False):
+                    positive_loss = positive_mask*batched_loss
+                    negative_loss = negative_mask*batched_loss
+                    batched_loss = positive_loss/max(1,nbr_positives)
+                    batched_loss += negative_loss/max(1,nbr_negatives)
+                    # (batch_size, )
                 loss_per_item.append(batched_loss.unsqueeze(1))
                 
             # Preparing next step:

@@ -7,10 +7,18 @@ from functools import partial
 import copy
 
 import Archi 
-
+import importlib
 
 def load_module(module_key, module_kwargs):
-    module_cls = getattr(Archi.modules, module_key, None)
+    if '.' in module_key:
+        module_path = module_key.split('.')
+        _from = '.'.join(module_path[:-1])
+        _from = importlib.import_module(_from)
+        module_name = module_path[-1]
+    else:
+        _from = Archi.modules
+        module_name = module_key
+    module_cls = getattr(_from, module_name, None)
     if module_cls is None:
         raise NotImplementedError
     module = module_cls(**module_kwargs)
