@@ -364,12 +364,16 @@ class OracleTHERModule(Module):
         self.vocabulary = set([w.lower() for w in vocabulary])
         self.vocab_size = vocab_size
         
+        #MODIF1 : padding is done with EoS and its index must be 0!
         # Make padding_idx=0:
-        self.vocabulary = ['PAD', 'SoS', 'EoS'] + list(self.vocabulary)
-        
-        while len(self.vocabulary) < self.vocab_size:
+        #self.vocabulary = ['PAD', 'SoS', 'EoS'] + list(self.vocabulary)
+        self.vocabulary = list(self.vocabulary)
+
+        while len(self.vocabulary) < self.vocab_size-2:
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
         self.vocabulary = list(set(self.vocabulary))
+        #MODIF1:
+        self.vocabulary = ['EoS', 'SoS'] + self.vocabulary
         
         self.w2idx = {}
         self.idx2w = {}
@@ -407,7 +411,9 @@ class OracleTHERModule(Module):
         if x.shape[-1] == self.max_sentence_length:
             predicted_sentences = x 
         else:
-            predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+            #MODIF1:
+            #predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+            predicted_sentences = self.w2idx['EoS']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
             predicted_sentences[:, 0] = self.w2idx['EoS']
 
         for t in range(self.max_sentence_length):
@@ -416,7 +422,8 @@ class OracleTHERModule(Module):
             # Compute loss:
             if gt_sentences is not None:
                 mask = torch.ones_like(gt_sentences[:, t])
-                mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
+                #MODIF1:
+                #mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
                 mask = mask.float().to(x.device)
                 # batch_size x 1
                 batched_loss = torch.zeros_like(mask)
@@ -435,7 +442,9 @@ class OracleTHERModule(Module):
                     # we still want the output of this module to make 
                     # sense with respect to the EoS token so we filter out
                     # any token that follows EoS token...
-                    predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
+                    #MODIF1:
+                    #predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
+                    predicted_sentences[b, idx_t+1:] = self.w2idx['EoS']
                     break
                 end_idx += 1
         try:
@@ -447,7 +456,9 @@ class OracleTHERModule(Module):
             # batch_size x max_sentence_length
             accuracies = (predicted_sentences==gt_sentences).float().mean(dim=0)
             # Computing accuracy on the tokens that matters the most:
-            mask = (gt_sentences!=self.w2idx['PAD'])
+            #MODIF1:
+            #mask = (gt_sentences!=self.w2idx['PAD'])
+            mask = (gt_sentences!=self.w2idx['EoS'])
             sentence_accuracies = (predicted_sentences==gt_sentences).float().masked_select(mask).mean()
             # BoS Accuracies:
             bos_accuracies = torch.zeros_like(predicted_sentences).float()
@@ -573,13 +584,17 @@ class CaptionRNNModule(Module):
         self.vocabulary = set([w.lower() for w in vocabulary])
         self.vocab_size = vocab_size
         
+        # MODIF1: 
         # Make padding_idx=0:
-        self.vocabulary = ['PAD', 'SoS', 'EoS'] + list(self.vocabulary)
+        #self.vocabulary = ['PAD', 'SoS', 'EoS'] + list(self.vocabulary)
+        self.vocabulary = list(self.vocabulary)
         
-        while len(self.vocabulary) < self.vocab_size:
+        while len(self.vocabulary) < self.vocab_size-2:
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
         self.vocabulary = list(set(self.vocabulary))
-        
+        #MODIF1:
+        self.vocabulary = ['EoS', 'SoS'] + self.vocabulary
+
         self.w2idx = {}
         self.idx2w = {}
         for idx, w in enumerate(self.vocabulary):
@@ -656,7 +671,31 @@ class CaptionRNNModule(Module):
     def reset(self):
         if self.config.get("semantic_embeddings_prior", False):
             self.semantic_prior = None
+            self.semantic_prior_logits = None
+            self.visual_features = None
+            self.text_features = None
     
+    def _compute_visual_features(self, x):
+        # (batch_size x nbr_visual_emb x visual_emb_size)
+        batch_size = x.shape[0]
+        nbr_visual_emb = x.shape[1]
+        x = x.reshape((batch_size*nbr_visual_emb, -1))
+        mm_x = self.input2mm(x)
+        l2_mm_x = F.normalize(mm_x, p=2.0, dim=-1).reshape(
+            (batch_size, nbr_visual_emb, -1),
+        )
+        # (batch_size x nbr_visual_emb x mm_size )
+        self.visual_features = l2_mm_x
+        return l2_mm_x
+    
+    def _compute_text_features(self, emb):
+        # (batch_size x nbr_text_emb x emb_size)
+        mm_sem_emb = self.sem2mm(emb)
+        l2_mm_sem_emb = F.normalize(mm_sem_emb, p=2.0, dim=-1)
+        # (batch_size x nbr_text_emb x mm_size)
+        self.text_features = l2_mm_sem_emb
+        return l2_mm_sem_emb
+
     def forward(self, x, gt_sentences=None, output_dict=None):
         '''
         If :param gt_sentences: is not `None`,
@@ -670,17 +709,19 @@ class CaptionRNNModule(Module):
         x = x.reshape(batch_size, -1)
         
         if self.config.get("semantic_embeddings_prior", False):
-            mm_x = self.input2mm(x)
-            l2_mm_x = F.normalize(mm_x, p=2.0, dim=-1).unsqueeze(-1)
+            l2_mm_x = self._compute_visual_features(x.unsqueeze(1)).transpose(2,1)
             # (batch_size x mm_size x 1)
             # Must be clone for it to be differentiable apparently...
             b_sem_emb = self.semantic_embedding.weight.clone().unsqueeze(0).repeat(batch_size, 1,1)
-            # (batch_size x vocab_size x emb_size )
-            mm_sem_emb = self.sem2mm(b_sem_emb)
-            l2_mm_sem_emb = F.normalize(mm_sem_emb, p=2.0, dim=-1)
+            # (batch_size x nbr_text_emb x emb_size)
+            # = (batch_size x vocab_size x emb_size )
+            l2_mm_sem_emb = self._compute_text_features(b_sem_emb) 
             # (batch_size x vocab_size x mm_size)
+            semantic_prior_logits = torch.bmm(l2_mm_sem_emb, l2_mm_x)
+            # (batch_size x 1 x vocab_size)
+            self.semantic_prior_logits = semantic_prior_logits
             prior = torch.softmax(
-                torch.bmm(l2_mm_sem_emb, l2_mm_x).squeeze(-1),
+                semantic_prior_logits.squeeze(-1),
                 dim=-1,
             )
             # (batch_size x vocab_size)
@@ -722,7 +763,9 @@ class CaptionRNNModule(Module):
 
         loss_per_item = []
 
-        predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+        #MODIF1:
+        #predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
+        predicted_sentences = self.w2idx['EoS']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
         predicted_logits = []
         hidden_states = []
         for t in range(self.max_sentence_length):
@@ -747,8 +790,9 @@ class CaptionRNNModule(Module):
             # Compute loss:
             if gt_sentences is not None:
                 mask = torch.ones_like(gt_sentences[:, t])
-                if not self.config.get("predict_PADs", False):
-                    mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
+                #MODIF1:
+                #if not self.config.get("predict_PADs", False):
+                #    mask = (gt_sentences[:, t]!=self.w2idx['PAD'])
                 mask = mask.float().to(x.device)
                 # batch_size x 1
                 if self.config.get("diversity_loss_weighting", False):
@@ -800,7 +844,9 @@ class CaptionRNNModule(Module):
                     # we still want the output of this module to make 
                     # sense with respect to the EoS token so we filter out
                     # any token that follows EoS token...
-                    predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
+                    #MODIF1:
+                    #predicted_sentences[b, idx_t+1:] = self.w2idx['PAD']
+                    predicted_sentences[b, idx_t+1:] = self.w2idx['EoS']
                     break
                 end_idx += 1
         try:
@@ -812,7 +858,9 @@ class CaptionRNNModule(Module):
             # batch_size x max_sentence_length
             accuracies = (predicted_sentences==gt_sentences).float().mean(dim=0)
             # Computing accuracy on the tokens that matters the most:
-            mask = (gt_sentences!=self.w2idx['PAD'])
+            #MODIF1:
+            mask = (gt_sentences!=self.w2idx['EoS'])
+            #mask = (gt_sentences!=self.w2idx['PAD'])
             sentence_accuracies = (predicted_sentences==gt_sentences).float().masked_select(mask).mean()
             # BoS Accuracies:
             bos_accuracies = torch.zeros_like(predicted_sentences).float()
