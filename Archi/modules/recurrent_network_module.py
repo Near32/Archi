@@ -559,6 +559,7 @@ class CaptionRNNModule(Module):
             "diversity_loss_weighting":False,
             "rectify_contrastive_imbalance":False,
             "semantic_embeddings_prior":False,
+            "semantic_prior_mixing":'additive',
         },
         input_stream_ids=None,
         output_stream_ids={},
@@ -778,7 +779,14 @@ class CaptionRNNModule(Module):
                 token_logit = F.log_softmax(token_unlogit, dim=-1) 
             else:
                 token_distr = torch.softmax(token_unlogit, dim=-1)
-                eff_token_distr = (prior+token_distr)/2.0
+                semantic_prior_mixing = self.config.get("semantic_prior_mixing", "additive")
+                if semantic_prior_mixing == 'additive':
+                    eff_token_distr = (prior+token_distr)/2.0
+                elif semantic_prior_mixing == 'multiplicative':
+                    eff_token_distr = prior*token_distr
+                    eff_token_distr = eff_token_distr/(eff_token_distr.sum(dim=-1)+1.0e-8)
+                else:
+                    raise NotImplementedError
                 token_logit = torch.log(eff_token_distr+1.0e-8)
 
             predicted_logits.append(token_logit)
