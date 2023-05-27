@@ -42,16 +42,18 @@ class RLCategoricalActorCriticHeadModule(Module):
         layer_fn = nn.Linear 
         if False : #self.dueling:
             self.fc_critic = DuelingLayer(input_dim=self.state_dim, action_dim=self.action_dim, layer_fn=layer_fn)
-        else:
+        elif False:
             self.fc_action = layer_fn(self.state_dim, self.action_dim)
             self.fc_ext_critic = layer_fn(self.state_dim, 1)
             if self.use_intrinsic_critic:
                 self.fc_int_critic = layer_fn(self.state_dim, 1)
             if layer_init_fn is not None:
                 print(f'WARNING: using layer init fn : {layer_init_fn} in {self}')
+                import ipdb; ipdb.set_trace()
+                # TODO : check whether initialisation affects entropy
                 self.fc_action = layer_init_fn(
                     self.fc_action, 
-                    w_scale=1e-2,
+                    w_scale=1e0, #1.0e-2
                     init_type='ortho',
                 )
                 self.fc_ext_critic = layer_init_fn(
@@ -69,7 +71,47 @@ class RLCategoricalActorCriticHeadModule(Module):
                         init_type='ortho',
                     )
                     #self.fc_int_critic = layer_init_fn(self.fc_int_critic, 1e-3)
+        else:
+            self.fc_action = [
+                layer_fn(self.state_dim, self.state_dim),
+                nn.ReLU(),
+                layer_fn(self.state_dim, self.action_dim),
+            ]
+            self.fc_ext_critic = [
+                layer_fn(self.state_dim, self.state_dim),
+                nn.ReLU(),
+                layer_fn(self.state_dim, 1),
+            ]
+            if self.use_intrinsic_critic:
+                self.fc_int_critic = layer_fn(self.state_dim, 1)
+            if layer_init_fn is not None:
+                print(f'WARNING: using layer init fn : {layer_init_fn} in {self}')
+                # TODO : check whether initialisation affects entropy
+                for lidx in range(len(self.fc_action)):
+                    self.fc_action[lidx] = layer_init_fn(
+                        self.fc_action[lidx], 
+                        w_scale=1e0, #1.0e-2
+                        init_type='ortho',
+                    )
+                self.fc_action = nn.Sequential(*self.fc_action)
+                for lidx in range(len(self.fc_ext_critic)):
+                    self.fc_ext_critic[lidx] = layer_init_fn(
+                        self.fc_ext_critic[lidx], 
+                        w_scale=1e-1 if lidx==0 else 1e-2, #1e0
+                        init_type='ortho',
+                    )
+                self.fc_ext_critic = nn.Sequential(*self.fc_ext_critic)
+                # TODO: propagate for intrinsic critic ...
 
+                #self.fc_action = layer_init_fn(self.fc_action, 1e-3)
+                #self.fc_ext_critic = layer_init_fn(self.fc_ext_critic, 1e0)
+                if self.use_intrinsic_critic:
+                    self.fc_int_critic = layer_init_fn(
+                        self.fc_int_critic, 
+                        w_scale=1e0,
+                        init_type='ortho',
+                    )
+                    #self.fc_int_critic = layer_init_fn(self.fc_int_critic, 1e-3)
         self.feature_dim = self.action_dim
 
         self.use_cuda = use_cuda
@@ -114,9 +156,10 @@ class RLCategoricalActorCriticHeadModule(Module):
         ext_v, int_v, action_logits = self.forward(phi_features)
         
         probs = F.softmax(action_logits, dim=-1)
-        # PREVIOUSLY: log_probs = F.log_softmax(action_logits, dim=-1)
+        # PREVIOUSLY: 
+        log_probs = F.log_softmax(action_logits, dim=-1)
         # POSSIBLE Now : like in regym's head :
-        log_probs = torch.log(probs+1.0e-8)
+        #log_probs = torch.log(probs+1.0e-8)
 
         # The following leads to very different legal_ent and ent:
         # log_probs = action_logits
