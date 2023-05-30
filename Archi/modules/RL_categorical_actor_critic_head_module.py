@@ -5,6 +5,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.distributions.categorical import Categorical
 
 from Archi.modules.module import Module 
 from Archi.modules.utils import layer_init
@@ -90,14 +91,14 @@ class RLCategoricalActorCriticHeadModule(Module):
                 for lidx in range(len(self.fc_action)):
                     self.fc_action[lidx] = layer_init_fn(
                         self.fc_action[lidx], 
-                        w_scale=1e0, #1.0e-2
+                        w_scale=1.0e-2,
                         init_type='ortho',
                     )
                 self.fc_action = nn.Sequential(*self.fc_action)
                 for lidx in range(len(self.fc_ext_critic)):
                     self.fc_ext_critic[lidx] = layer_init_fn(
                         self.fc_ext_critic[lidx], 
-                        w_scale=1e-1 if lidx==0 else 1e-2, #1e0
+                        w_scale=1.0, #1e-1 if lidx==0 else 1e-2, #1e0
                         init_type='ortho',
                     )
                 self.fc_ext_critic = nn.Sequential(*self.fc_ext_critic)
@@ -106,6 +107,7 @@ class RLCategoricalActorCriticHeadModule(Module):
                 #self.fc_action = layer_init_fn(self.fc_action, 1e-3)
                 #self.fc_ext_critic = layer_init_fn(self.fc_ext_critic, 1e0)
                 if self.use_intrinsic_critic:
+                    raise NotImplementedError
                     self.fc_int_critic = layer_init_fn(
                         self.fc_int_critic, 
                         w_scale=1e0,
@@ -155,15 +157,20 @@ class RLCategoricalActorCriticHeadModule(Module):
         
         ext_v, int_v, action_logits = self.forward(phi_features)
         
-        probs = F.softmax(action_logits, dim=-1)
         # PREVIOUSLY: 
-        log_probs = F.log_softmax(action_logits, dim=-1)
-        # POSSIBLE Now : like in regym's head :
+        #probs = F.softmax(action_logits, dim=-1)
+        #log_probs = F.log_softmax(action_logits, dim=-1)
+        #NOW:
+        batch_size = action_logits.shape[0]
+        probs = Categorical(logits=action_logits)
+        # POSSIBLE previvously : like in regym's head :
         #log_probs = torch.log(probs+1.0e-8)
 
         # The following leads to very different legal_ent and ent:
         # log_probs = action_logits
-        entropy = -torch.sum(probs*log_probs, dim=-1)
+        #entropy = -torch.sum(probs*log_probs, dim=-1)
+        entropy = probs.entropy()
+        entropy = entropy.reshape(batch_size)
         # batch
 
         legal_actions = torch.ones_like(action_logits)
@@ -183,11 +190,13 @@ class RLCategoricalActorCriticHeadModule(Module):
             if self.greedy:
                 action  = legal_qa.max(dim=-1, keepdim=True)[1]
             else:
-                action = torch.multinomial(legal_qa.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
+                #action = torch.multinomial(legal_qa.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
+                action = probs.sample()
         # batch #x 1
         
         #log_probs = torch.log(probs+EPS)
-        log_probs = log_probs.gather(1, action).squeeze(1)
+        #log_probs = log_probs.gather(1, action).squeeze(1)
+        log_probs = probs.log_prob(action).reshape(batch_size)
         # batch 
         
         legal_probs = F.softmax( legal_qa, dim=-1 )

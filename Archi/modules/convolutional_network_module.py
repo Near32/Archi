@@ -237,8 +237,8 @@ class ConvolutionalNetworkModule(Module):
         self.non_linearities = non_linearities
         if not isinstance(non_linearities, list):
             self.non_linearities = [non_linearities]
-        while len(self.non_linearities) <= (len(channels) - 1):
-            self.non_linearities.append(self.non_linearities[0])
+        while len(self.non_linearities) <= (len(channels)+len(fc_hidden_units)):
+            self.non_linearities.append(self.non_linearities[-1])
         for idx, nl in enumerate(self.non_linearities):
             if not isinstance(nl, str):
                 raise NotImplementedError
@@ -338,7 +338,7 @@ class ConvolutionalNetworkModule(Module):
 
         self.feat_map_dim = dim 
         self.feat_map_depth = channels[-1]
-
+        
         hidden_units = fc_hidden_units
         if hidden_units is None or fc_hidden_units == []:
             hidden_units = [dim * dim * channels[-1]]
@@ -353,7 +353,9 @@ class ConvolutionalNetworkModule(Module):
         if feature_dim != -1 or fc_hidden_units != []:
             self.fcs = [] #nn.ModuleList()
             nbr_fclayers = len(hidden_units[1:])
+            self.non_linearities = self.non_linearities[len(channels):]
             for lidx, (nbr_in, nbr_out) in enumerate(zip(hidden_units, hidden_units[1:])):
+                add_non_lin = True
                 add_bn = False
                 if isinstance(nbr_in, str) and 'BN' in nbr_in:
                     cfg = int(nbr_in[2:])
@@ -367,8 +369,10 @@ class ConvolutionalNetworkModule(Module):
                 self.fcs.append( layer_init(nn.Linear(nbr_in, nbr_out), w_scale=math.sqrt(2)))
                 if add_bn:
                     self.fcs.append(nn.BatchNorm1d(nbr_out))
-                if lidx != (nbr_fclayers-1):
-                    self.fcs.append(nn.ReLU())
+                #if lidx != (nbr_fclayers-1):
+                if add_non_lin \
+                and self.non_linearities[lidx] is not None:
+                    self.fcs.append(self.non_linearities[lidx]())
                 if self.dropout:
                     self.fcs.append( nn.Dropout(p=self.dropout))
             self.fcs = nn.Sequential(*self.fcs)
