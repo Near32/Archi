@@ -784,7 +784,7 @@ class CaptionRNNModule(Module):
                     eff_token_distr = (prior+token_distr)/2.0
                 elif semantic_prior_mixing == 'multiplicative':
                     eff_token_distr = prior*token_distr
-                    eff_token_distr = eff_token_distr/(eff_token_distr.sum(dim=-1)+1.0e-8)
+                    eff_token_distr = eff_token_distr/(eff_token_distr.sum(dim=-1, keepdim=True)+1.0e-8)
                 else:
                     raise NotImplementedError
                 token_logit = torch.log(eff_token_distr+1.0e-8)
