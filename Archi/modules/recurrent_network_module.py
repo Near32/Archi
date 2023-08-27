@@ -727,6 +727,8 @@ class CaptionRNNModule(Module):
             )
             # (batch_size x vocab_size)
             self.semantic_prior = prior
+            if self.config.get("semantic_prior_mixing_with_detach", False):
+                prior = prior.detach()
         else:
             prior = None
             self.semantic_prior = None
