@@ -560,6 +560,8 @@ class CaptionRNNModule(Module):
             "rectify_contrastive_imbalance":False,
             "semantic_embeddings_prior":False,
             "semantic_prior_mixing":'additive',
+            "input_mm_projector_BN": False,
+            "semantic_embedding_init": 'none',
         },
         input_stream_ids=None,
         output_stream_ids={},
@@ -659,10 +661,31 @@ class CaptionRNNModule(Module):
 
         if self.config.get("semantic_embeddings_prior", False):
             self.semantic_embedding = nn.Embedding(self.voc_size, self.embedding_size)
+            sem_emb_init = self.config.get("semantic_embedding_init", 'none')
+            if sem_emb_init == 'ortho':
+                nn.init.orthogonal_(self.semantic_embedding.weight)
+            elif sem_emb_init == 'xavier_normal':
+                nn.init.xavier_normal_(self.semantic_embedding.weight)
+            elif sem_emb_init == 'xavier_uniform':
+                nn.init.xavier_uniform_(self.semantic_embedding.weight)
+            elif sem_emb_init == 'eye':
+                nn.init.eye_(self.semantic_embedding.weight)
+            elif sem_emb_init == 'normal':
+                nn.init.normal_(self.semantic_embedding.weight)
+            elif sem_emb_init == 'uniform':
+                nn.init.uniform_(self.semantic_embedding.weight)
+            
             self.mm_size = self.hidden_units
             self.sem2mm = nn.Linear(self.embedding_size, self.mm_size, bias=False)
-            self.input2mm = nn.Linear(self.input_dim, self.mm_size, bias=False)
-
+            #self.input2mm = nn.Linear(self.input_dim, self.mm_size, bias=False)
+            # Adding BN :
+            input2mm = [nn.Linear(self.input_dim, self.mm_size, bias=False)]
+            if self.config.get("input_mm_projector_BN", False):
+                input2mm += [
+                    nn.BatchNorm1d(self.mm_size),
+                    nn.Linear(self.mm_size, self.mm_size, bias=False),
+                ]
+            self.input2mm = nn.Sequential(*input2mm)
         self.criterion = nn.CrossEntropyLoss(reduction='none')
         
         self.use_cuda = use_cuda
