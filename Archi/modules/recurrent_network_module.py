@@ -695,6 +695,7 @@ class CaptionRNNModule(Module):
     def reset(self):
         if self.config.get("semantic_embeddings_prior", False):
             self.semantic_prior = None
+            self.semantic_prior_matrix = None
             self.semantic_prior_logits = None
             self.visual_features = None
             self.text_features = None
@@ -729,20 +730,27 @@ class CaptionRNNModule(Module):
             gt_sentences = gt_sentences.long().to(x.device)
         
         batch_size = x.shape[0]
-        # POSSIBLE TEMPORAL DIM ...
-        x = x.reshape(batch_size, -1)
         
         if self.config.get("semantic_embeddings_prior", False):
-            l2_mm_x = self._compute_visual_features(x.unsqueeze(1)).transpose(2,1)
-            # (batch_size x mm_size x 1)
+            prior_x = x
+            if len(x.shape)>=4:
+                prior_x = prior_x.transpose(-3,-1)
+                emb_dim = prior_x.shape[-1]
+                prior_x = prior_x.reshape(batch_size, -1, emb_dim)
+            else:
+                prior_x = prior_x.reshape(batch_size, 1, -1) 
+            l2_mm_x = self._compute_visual_features(prior_x).transpose(2,1)
+            # (batch_size x mm_size x nbr_visual_emb)
             # Must be clone for it to be differentiable apparently...
             b_sem_emb = self.semantic_embedding.weight.clone().unsqueeze(0).repeat(batch_size, 1,1)
             # (batch_size x nbr_text_emb x emb_size)
             # = (batch_size x vocab_size x emb_size )
             l2_mm_sem_emb = self._compute_text_features(b_sem_emb) 
             # (batch_size x vocab_size x mm_size)
-            semantic_prior_logits = torch.bmm(l2_mm_sem_emb, l2_mm_x)
-            # (batch_size x 1 x vocab_size)
+            self.semantic_prior_matrix = torch.bmm(l2_mm_sem_emb, l2_mm_x)
+            # (batch_size x vocab_size x nbr_visual_emb )
+            semantic_prior_logits = torch.sum(self.semantic_prior_matrix, dim=-1, keepdim=True)
+            # (batch_size x vocab_size x 1)
             self.semantic_prior_logits = semantic_prior_logits
             prior = torch.softmax(
                 semantic_prior_logits.squeeze(-1),
@@ -756,6 +764,14 @@ class CaptionRNNModule(Module):
             prior = None
             self.semantic_prior = None
 
+        if len(x.shape)>=4:
+            # assume input dim corresponds to the number of depth channel
+            x = x.transpose(-3,-1)
+            assert self.input_dim == x.shape[-1]
+            x = x.reshape(batch_size, -1, self.input_dim).sum(dim=1)
+        else:
+            x = x.reshape(batch_size, -1)
+        
         # Input Decoding:
         dx = self.input_decoder(x)
 
