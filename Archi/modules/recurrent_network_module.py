@@ -339,7 +339,7 @@ class OracleTHERModule(Module):
         vocabulary=None,
         vocab_size=None,
         id='OracleTHERModule_0',
-        config=None,
+        config={'hidden_units':1024},
         input_stream_ids=None,
         output_stream_ids={},
         use_cuda=False,
@@ -391,13 +391,21 @@ class OracleTHERModule(Module):
         if self.use_cuda:
             self = self.cuda()
     
+    def reset(self):
+        #if self.config.get("semantic_embeddings_prior", False):
+        self.semantic_prior = None
+        self.semantic_prior_matrix = None
+        self.semantic_prior_logits = None
+        self.visual_features = None
+        self.text_features = None
+    
     def get_reset_states(self, cuda=False, repeat=1):
         dummy_goal = torch.zeros((repeat, 1))
         if cuda:    dummy_goal = dummy_goal.cuda()
         return {'achieved_goal': [dummy_goal]}
 
 
-    def forward(self, x, gt_sentences=None):
+    def forward(self, x, gt_sentences=None, output_dict=None):
         '''
         If :param gt_sentences: is not `None`,
         then teacher forcing is implemented...
@@ -409,8 +417,10 @@ class OracleTHERModule(Module):
         loss_per_item = []
         
         if x.shape[-1] == self.max_sentence_length:
-            predicted_sentences = x 
+            predicted_sentences = x.long() 
         else:
+            import ipdb; ipdb.set_trace()
+            #TODO : need to figure out when it occurs ?
             #MODIF1:
             #predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
             predicted_sentences = self.w2idx['EoS']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
@@ -430,6 +440,19 @@ class OracleTHERModule(Module):
                 batched_loss *= mask
                 loss_per_item.append(batched_loss.unsqueeze(1))
                 
+        predicted_logits = torch.zeros(
+            batch_size, self.max_sentence_length, self.vocab_size,
+        ).to(x.device)
+        # batch_size x max_sentence_length x vocab_size 
+        predicted_logits = predicted_logits.scatter_(
+            dim=-1,
+            index=predicted_sentences.unsqueeze(-1,
+                ).repeat(1,1,self.vocab_size),
+            src=torch.ones_like(predicted_logits),
+        )
+        hidden_states = torch.zeros(batch_size, self.max_sentence_length, self.config.get('hidden_units', 1024)).to(x.device)
+        # batch_size x max_sentence_length x hidden_state_dim=1=dummy
+
         # Regularize tokens after EoS :
         EoS_count = 0
         for b in range(batch_size):
@@ -471,7 +494,9 @@ class OracleTHERModule(Module):
             bos_sentence_accuracies = bos_accuracies.masked_select(mask).mean()
             bos_accuracies = bos_accuracies.mean(dim=0)
             output_dict = {
+                'hidden_states':hidden_states, 
                 'prediction':predicted_sentences, 
+                'prediction_logits':predicted_logits, 
                 'loss_per_item':loss_per_item, 
                 'accuracies':accuracies, 
                 'bos_accuracies':bos_accuracies, 
@@ -480,6 +505,13 @@ class OracleTHERModule(Module):
             }
 
             return output_dict
+
+        if output_dict is not None:
+            output_dict.update({
+                'hidden_states':hidden_states, 
+                'prediction':predicted_sentences, 
+                'prediction_logits':predicted_logits, 
+            })
 
         return predicted_sentences
 
@@ -520,6 +552,7 @@ class OracleTHERModule(Module):
                 output = self.forward(
                     x=experiences,
                     gt_sentences=gt_sentences,
+                    output_dict=output_dict,
                 )
                 output_dict['prediction'] = output
             else:
@@ -536,7 +569,8 @@ class OracleTHERModule(Module):
             outputs_stream_dict[output_key] = [output_sentences]
             
             for okey, ovalue in output_dict.items():
-                outputs_stream_dict[f"inputs:{key}_{okey}"] = [ovalue]
+                outputs_stream_dict[f"inputs:{self.id}:{key}_{okey}"] = [ovalue]
+                #outputs_stream_dict[f"inputs:{key}_{okey}"] = [ovalue]
         
         return outputs_stream_dict 
 
