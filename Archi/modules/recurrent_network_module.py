@@ -417,7 +417,9 @@ class OracleTHERModule(Module):
         loss_per_item = []
         
         if x.shape[-1] == self.max_sentence_length:
-            predicted_sentences = x.long() 
+            predicted_sentences = x.reshape(
+                batch_size, self.max_sentence_length,
+            ).clone().long() 
         else:
             import ipdb; ipdb.set_trace()
             #TODO : need to figure out when it occurs ?
