@@ -5,7 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from Archi.modules.module import Module 
-from Archi.modules.utils import layer_init
+from Archi.modules.utils import (
+    layer_init,
+    copy_hdict,
+    apply_on_hdict,
+)
 
 import wandb
 
@@ -81,7 +85,9 @@ class LSTMModule(Module):
         self.use_cuda = use_cuda
         if self.use_cuda:
             self = self.cuda()
-
+        
+        self.get_reset_states(cuda=self.use_cuda)
+        
     def forward(self, inputs):
         '''
         :param inputs: input to LSTM cells. Structured as (feed_forward_input, {hidden: hidden_states, cell: cell_states}).
@@ -165,17 +171,70 @@ class LSTMModule(Module):
         return outputs_stream_dict 
 
     def get_reset_states(self, cuda=False, repeat=1):
-        hidden_states, cell_states = [], []
-        for layer in self.layers:
-            h = torch.zeros(repeat, layer.hidden_size)
-            if cuda:
-                h = h.cuda()
-            hidden_states.append(h)
-            cell_states.append(h)
-        iteration = torch.zeros((repeat, 1))
-        if cuda:    iteration = iteration.cuda()
-        iteration = [iteration]
-        return {'hidden': hidden_states, 'cell': cell_states, 'iteration': iteration}
+        #TODO: repeat into other Moduels:
+        if not hasattr(self, 'reset_states'):
+            hidden_states, cell_states = [], []
+            for layer in self.layers:
+                h = torch.zeros(repeat, layer.hidden_size)
+                #if cuda:
+                #    h = h.cuda()
+                hidden_states.append(h)
+                cell_states.append(h)
+            iteration = torch.zeros((repeat, 1))
+            #if cuda:    iteration = iteration.cuda()
+            iteration = [iteration]
+            self.reset_states = {'hidden': hidden_states, 'cell': cell_states, 'iteration': iteration}
+        
+        def init(x):
+            outx = x.repeat(repeat, *[1 for _ in range(len(x.shape)-1)])
+            if cuda:  outx = outx.cuda() 
+            return outx
+        
+        reset_states = copy_hdict(self.reset_states)
+        reset_states = apply_on_hdict(
+          reset_states,
+          fn=init,
+        )
+        
+        return reset_states
+      
+    def set_reset_states(self, new_reset_states):
+        #TODO: repeat into other Moduels 
+        repeat = 1
+        if 'hidden' not in new_reset_states:
+            hidden_states = []
+            for layer in self.layers:
+                h = torch.zeros(repeat, layer.hidden_size)
+                if cuda:
+                    h = h.cuda()
+                hidden_states.append(h)
+            new_reset_states['hidden'] = hidden_states
+        else:
+            assert len(new_reset_states['hidden']) == len(self.layers)
+            for nrs, layer in zip(new_reset_states['hidden'], self.layers):
+                assert nrs.shape[0] == 1 and nrs.shape[1] == layer.hidden_size
+        if 'cell' not in new_reset_states:
+            cell_states = []
+            for layer in self.layers:
+                h = torch.zeros(repeat, layer.hidden_size)
+                if cuda:
+                    h = h.cuda()
+                cell_states.append(h)
+            new_reset_states['cell'] = cell_states
+        else:
+            assert len(new_reset_states['cell']) == len(self.layers)
+            for nrs, layer in zip(new_reset_states['cell'], self.layers):
+                assert nrs.shape[0] == 1 and nrs.shape[1] == layer.hidden_size
+        if 'iteration' not in new_reset_states:
+           iteration = torch.zeros((repeat, 1))
+           if cuda:    iteration = iteration.cuda()
+           new_reset_states['iteration'] = [iteration]
+        else:
+            assert len(new_reset_states['iteration']) == 1 
+            assert new_reset_states['iteration'][0].shape[0] == 1
+            assert new_reset_states['iteration'][0].shape[1] == 1
+        self.reset_states = new_reset_states
+        return
 
     def get_feature_shape(self):
         return self.feature_dim

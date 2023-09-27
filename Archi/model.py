@@ -9,7 +9,11 @@ import torch.nn as nn
 
 from Archi.utils import StreamHandler
 from Archi.modules import Module, load_module 
-from Archi.modules.utils import copy_hdict, recursive_inplace_update
+from Archi.modules.utils import (
+    copy_hdict, 
+    apply_on_hdict,
+    recursive_inplace_update,
+)
 
 
 class Model(Module):
@@ -44,8 +48,10 @@ class Model(Module):
         # Register Pipelines:
         self.pipelines = self.config['pipelines']
         
+        self.extra_reset_states = {}
         self.reset()
    
+    #def get_reset_states(self, **kwargs):
     def get_reset_states(self, kwargs={}):
         """
         Provide a reset state without changing the current state.
@@ -60,10 +66,32 @@ class Model(Module):
                 #for ks, v in reset_dict.items():
                 #    #print(f"--> {ks} : {type(v)}")
                 rs[m.get_id()] = reset_dict
+        
+        def reg(x):
+            outx = x.repeat(batch_size, *[1 for _ in range(len(x.shape)-1)])
+            if cuda:  outx = outx.cuda()
+            return outx
+        for k, hdict in self.extra_reset_states.items():
+            rs[k] = apply_on_hdict(
+                hdict=hdict,
+                fn=reg,
+            )
         return rs
-        #self.reset_states(batch_size=batch_size, cuda=cuda)
-        #return copy_hdict(self.stream_handler["inputs"])
    
+    def set_reset_states(self, new_reset_states):
+        """
+        Reset the reset states of every module.
+        """
+        self.extra_reset_states = {}
+        for k,m in self.config['modules'].items():
+            if hasattr(m, 'set_reset_states') \
+            and k in new_reset_states.keys():
+                m.set_reset_states(new_reset_states[k])
+        for k, hdict in new_reset_states.items():
+            if k in self.config['modules']:   continue
+            self.extra_reset_states[k] = hdict
+        return
+
     def reset(self):
         self.stream_handler = StreamHandler()
         self.stream_handler.register("logs_dict")
@@ -89,7 +117,8 @@ class Model(Module):
         pass
 
     def reset_states(self, batch_size=1, cuda=False):
-        # WATCHOUT: reset states is usually called after inputs has been setup with obs etc.
+        # WATCHOUT: reset states is usually called after inputs 
+        # have been setup with obs etc.
         # Thus, it is not possible to call the following:
         # self.stream_handler.reset("inputs")
         self.batch_size = batch_size
