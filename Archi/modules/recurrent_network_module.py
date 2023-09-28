@@ -394,9 +394,9 @@ class GRUModule(Module):
 class OracleTHERModule(Module):
     def __init__(
         self,
-        max_sentence_length,
+        _max_sentence_length,
         vocabulary=None,
-        vocab_size=None,
+        _vocab_size=None,
         id='OracleTHERModule_0',
         config={'hidden_units':1024},
         input_stream_ids=None,
@@ -421,7 +421,7 @@ class OracleTHERModule(Module):
             vocabulary = vocabulary.split(' ')
         
         self.vocabulary = set([w.lower() for w in vocabulary])
-        self.vocab_size = vocab_size
+        self.vocab_size = _vocab_size
         
         #MODIF1 : padding is done with EoS and its index must be 0!
         # Make padding_idx=0:
@@ -440,7 +440,7 @@ class OracleTHERModule(Module):
             self.w2idx[w] = idx
             self.idx2w[idx] = w
 
-        self.max_sentence_length = max_sentence_length
+        self.max_sentence_length = _max_sentence_length
         self.voc_size = len(self.vocabulary)
         
         # Dummy weight to avoid optimizer complaints...
@@ -480,12 +480,9 @@ class OracleTHERModule(Module):
                 batch_size, self.max_sentence_length,
             ).clone().long() 
         else:
-            import ipdb; ipdb.set_trace()
-            #TODO : need to figure out when it occurs ?
-            #MODIF1:
-            #predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
             predicted_sentences = self.w2idx['EoS']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
-            predicted_sentences[:, 0] = self.w2idx['EoS']
+            predicted_sentences[:,:x.shape[-1],...] = x.reshape(batch_size, -1)
+            #predicted_sentences[:, 0] = self.w2idx['EoS']
 
         for t in range(self.max_sentence_length):
             #predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
