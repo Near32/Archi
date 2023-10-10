@@ -398,7 +398,7 @@ class OracleTHERModule(Module):
         vocabulary=None,
         _vocab_size=None,
         id='OracleTHERModule_0',
-        config={'hidden_units':1024},
+        config={'hidden_units':1024, 'logits_base':1.0,},
         input_stream_ids=None,
         output_stream_ids={},
         use_cuda=False,
@@ -445,6 +445,7 @@ class OracleTHERModule(Module):
         
         # Dummy weight to avoid optimizer complaints...
         self.dummy = nn.Linear(1,1)
+        self.logits_base = self.config.get('logits_base', 1.0)
         
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -508,6 +509,7 @@ class OracleTHERModule(Module):
                 ).repeat(1,1,self.vocab_size),
             src=torch.ones_like(predicted_logits),
         )
+        predicted_logits *= self.logits_base
         hidden_states = torch.zeros(batch_size, self.max_sentence_length, self.config.get('hidden_units', 1024)).to(x.device)
         # batch_size x max_sentence_length x hidden_state_dim=1=dummy
 
