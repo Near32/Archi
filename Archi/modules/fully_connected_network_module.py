@@ -160,7 +160,7 @@ class FullyConnectedNetworkModule(Module):
                 experiences = experiences[0]
             batch_size = experiences.size(0)
 
-            experiences = experiences.view(batch_size, -1)
+            experiences = experiences.reshape(batch_size, -1)
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.layers(experiences)
