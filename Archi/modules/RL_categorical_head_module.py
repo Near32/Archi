@@ -16,9 +16,9 @@ class RLCategoricalHeadModule(Module):
     def __init__(
         self, 
         state_dim,   
-	action_dim,
-	noisy=False,
-	dueling=False,
+        action_dim,
+        noisy=False,
+        dueling=False,
         id='RLCategoricalHeadModule_0', 
         config=None,
         input_stream_ids=None,
@@ -49,6 +49,14 @@ class RLCategoricalHeadModule(Module):
             self.fc_critic = layer_fn(self.state_dim, self.action_dim)
             if layer_init_fn is not None:
                 self.fc_critic = layer_init_fn(self.fc_critic, 1e0)
+
+        if config is not None \
+        and 'mlp_nbr_layers' in config:
+            self.mlp = []
+            for lidx in range(config['mlp_nbr_layers']):
+                self.mlp += [layer_init_fn( nn.Linear(self.state_dim, self.state_dim), 1e-1)]
+                self.mlp += [nn.ReLU()]
+            self.mlp = nn.Sequential(*self.mlp)
 
         self.feature_dim = self.action_dim
 
@@ -86,7 +94,10 @@ class RLCategoricalHeadModule(Module):
         phi_features = torch.cat(phi_features_list, dim=-1)
         
         if self.use_cuda:   phi_features = phi_features.cuda()
-        
+	
+        if hasattr(self, 'mlp'):
+            phi_features = self.mlp(phi_features)
+
         qa = self.forward(phi_features)
         
         legal_actions = torch.ones_like(qa)
