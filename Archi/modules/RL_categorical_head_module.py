@@ -52,9 +52,12 @@ class RLCategoricalHeadModule(Module):
 
         if config is not None \
         and 'mlp_nbr_layers' in config:
+            batch_norm = config.get('with_batchnorm', False)   
             self.mlp = []
             for lidx in range(config['mlp_nbr_layers']):
-                self.mlp += [layer_init_fn( nn.Linear(self.state_dim, self.state_dim), 1e-1)]
+                self.mlp += [layer_init_fn( nn.Linear(self.state_dim, self.state_dim, bias=not batch_norm), 1e0)]
+                if batch_norm:    
+                    self.mlp += [nn.BatchNorm1d(self.state_dim)]
                 self.mlp += [nn.ReLU()]
             self.mlp = nn.Sequential(*self.mlp)
 
