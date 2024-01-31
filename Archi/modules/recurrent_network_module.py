@@ -3,6 +3,7 @@ from typing import Dict, List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from ordered_set import OrderedSet
 
 from Archi.modules.module import Module 
 from Archi.modules.utils import (
@@ -420,7 +421,7 @@ class OracleTHERModule(Module):
         if isinstance(vocabulary, str):
             vocabulary = vocabulary.split(' ')
         
-        self.vocabulary = set([w.lower() for w in vocabulary])
+        self.vocabulary = OrderedSet([w.lower() for w in vocabulary])
         self.vocab_size = _vocab_size
         
         #MODIF1 : padding is done with EoS and its index must be 0!
@@ -430,7 +431,7 @@ class OracleTHERModule(Module):
 
         while len(self.vocabulary) < self.vocab_size-2:
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
-        self.vocabulary = list(set(self.vocabulary))
+        self.vocabulary = list(OrderedSet(self.vocabulary))
         #MODIF1:
         self.vocabulary = ['EoS', 'SoS'] + self.vocabulary
         
@@ -439,6 +440,9 @@ class OracleTHERModule(Module):
         for idx, w in enumerate(self.vocabulary):
             self.w2idx[w] = idx
             self.idx2w[idx] = w
+        
+        print(type(self))
+        print(self.idx2w)
 
         self.max_sentence_length = _max_sentence_length
         self.voc_size = len(self.vocabulary)
@@ -678,7 +682,7 @@ class CaptionRNNModule(Module):
         if isinstance(vocabulary, str):
             vocabulary = vocabulary.split(' ')
         
-        self.vocabulary = set([w.lower() for w in vocabulary])
+        self.vocabulary = OrderedSet([w.lower() for w in vocabulary])
         self.vocab_size = vocab_size
         
         # MODIF1: 
@@ -688,7 +692,7 @@ class CaptionRNNModule(Module):
         
         while len(self.vocabulary) < self.vocab_size-2:
             self.vocabulary.append( f"DUMMY{len(self.vocabulary)}")
-        self.vocabulary = list(set(self.vocabulary))
+        self.vocabulary = list(OrderedSet(self.vocabulary))
         #MODIF1:
         self.vocabulary = ['EoS', 'SoS'] + self.vocabulary
 
@@ -939,7 +943,7 @@ class CaptionRNNModule(Module):
                 mask = mask.float().to(x.device)
                 # batch_size x 1
                 if self.config.get("diversity_loss_weighting", False):
-                    set_values = set(gt_sentences[:,t].cpu().tolist())
+                    set_values = OrderedSet(gt_sentences[:,t].cpu().tolist())
                     nbr_div = len(set_values)
                     mask *= max(1.0, nbr_div)
                     try:

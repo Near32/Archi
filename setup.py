@@ -30,6 +30,7 @@ setup(
 
     install_requires=[
 	#'tqdm',
+        'ordered-set',
         'pyyaml',
         'cloudpickle',
 	'numpy',
