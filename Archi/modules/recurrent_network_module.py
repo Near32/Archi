@@ -907,6 +907,7 @@ class CaptionRNNModule(Module):
         #predicted_sentences = self.w2idx['PAD']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
         predicted_sentences = self.w2idx['EoS']*torch.ones(batch_size, self.max_sentence_length, dtype=torch.long).to(x.device)
         predicted_logits = []
+        predicted_argmax_logits = []
         hidden_states = []
         for t in range(self.max_sentence_length):
             output, decoder_hidden = self._rnn(decoder_input, h_c=decoder_hidden)
@@ -930,10 +931,10 @@ class CaptionRNNModule(Module):
 
             predicted_logits.append(token_logit)
             #idxs_next_token = torch.argmax(token_distribution, dim=1)
-            idxs_next_token = torch.argmax(token_logit, dim=1)
+            logits_next_token, idxs_next_token = torch.max(token_logit, dim=1)
             # batch_size x 1
             predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
-            
+            predicted_argmax_logits.append(logits_next_token)
             # Compute loss:
             if gt_sentences is not None:
                 mask = torch.ones_like(gt_sentences[:, t])
@@ -974,6 +975,8 @@ class CaptionRNNModule(Module):
             decoder_input = self.embedding(idxs_next_token).unsqueeze(1)
             # batch_size x 1 x embedding_size            
         
+        predicted_argmax_logits = torch.stack(predicted_argmax_logits, dim=1)
+        # batch_size x max_sentence_length x vocab_size 
         predicted_logits = torch.stack(predicted_logits, dim=1)
         # batch_size x max_sentence_length x vocab_size 
         hidden_states = torch.stack(hidden_states, dim=1)
@@ -981,6 +984,9 @@ class CaptionRNNModule(Module):
 
         # Regularize tokens after EoS :
         EoS_count = 0
+        predicted_sentences_length = []
+        sentences_likelihoods = []
+        sentences_perplexities = []
         for b in range(batch_size):
             end_idx = 0
             for idx_t in range(predicted_sentences.shape[1]):
@@ -996,6 +1002,19 @@ class CaptionRNNModule(Module):
                     predicted_sentences[b, idx_t+1:] = self.w2idx['EoS']
                     break
                 end_idx += 1
+            predicted_sentences_length.append(end_idx)
+            #Compute perplexity:
+            slhd = torch.prod(torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1)))
+            # unstable : torch.prod(predicted_argmax_logits[b,:end_idx+1].exp(), keepdim=False)
+            #perplexity = torch.pow(1.0/slhd, 1.0/(end_idx+1))
+            perplexity = 1.0/(slhd+1e-8)
+            sentences_likelihoods.append(slhd)
+            sentences_perplexities.append(perplexity)
+        
+        sentences_likelihoods = torch.stack(sentences_likelihoods, dim=-1)
+        sentences_perplexities = torch.stack(sentences_perplexities, dim=-1)
+        # batch_size 
+        
         try:
             wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
         except Exception as e:
@@ -1036,7 +1055,9 @@ class CaptionRNNModule(Module):
             output_dict.update({
                 'hidden_states':hidden_states, 
                 'prediction':predicted_sentences, 
-                'prediction_logits':predicted_logits, 
+                'prediction_logits':predicted_logits,
+                'prediction_likelihoods':sentences_likelihoods,
+                'prediction_perplexities':sentences_perplexities, 
             })
 
         return predicted_sentences
