@@ -703,7 +703,7 @@ class CaptionRNNModule(Module):
             self.idx2w[idx] = w
 
         self.max_sentence_length = max_sentence_length
-        self.voc_size = len(self.vocabulary)
+        self.voc_size = self.vocab_size #len(self.vocabulary)
 
         self.embedding_size = embedding_size
         if isinstance(hidden_units, list):  hidden_units=hidden_units[-1]
