@@ -1087,6 +1087,11 @@ class CaptionRNNModule(Module):
                 assert len(experiences)==1, f"Provided too many input on id:{key}"
                 experiences = experiences[0]
             batch_size = experiences.size(0)
+            
+            if len(experiences.shape)>2 \
+            and experiences.shape[-1] != experiences.shape[-2]:
+                # if it is not a feature map but it has an extra dimension:
+                experiences = experiences.reshape((batch_size, -1))
 
             if self.use_cuda:   experiences = experiences.cuda()
 

@@ -116,7 +116,13 @@ def recursive_inplace_update(
             
             # else : we know this key is a leaf_key:
             leaf_key = key
-            listvalue = [value.clone() for value in extra_pointer[leaf_key]]
+            if extra_pointer[leaf_key] is None \
+            or (isinstance(extra_pointer[leaf_key], list) \
+            and len(extra_pointer[leaf_key])==1 \
+            and extra_pointer[leaf_key][0] is None):
+                listvalue = None
+            else:
+                listvalue = [value.clone() for value in extra_pointer[leaf_key]]
             if needed_init: #leaf_key not in in_pointer:
                 # initializing here, and preprocessing below...
                 in_pointer[leaf_key] = listvalue

@@ -1,6 +1,7 @@
 from typing import Dict, List 
 
 import math 
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -443,8 +444,9 @@ class ConvolutionalNetworkModule(Module):
 
             original_shape = experiences.shape
             if len(original_shape)>4:
-                temporal_dim = original_shape[1]
-                experiences = experiences.view(batch_size*temporal_dim, *original_shape[2:])
+                temporal_dims = original_shape[1:-3]
+                product_tdims = np.prod(temporal_dims)
+                experiences = experiences.view(batch_size*product_tdims, *original_shape[-3:])
             
             if self.use_cuda:   experiences = experiences.cuda()
 
@@ -453,7 +455,7 @@ class ConvolutionalNetworkModule(Module):
             if len(original_shape)>4:
                 features = features.reshape(
                     batch_size,
-                    temporal_dim,
+                    *temporal_dims,
                     *features.shape[1:],
                 )
 

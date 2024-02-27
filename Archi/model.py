@@ -175,7 +175,7 @@ class Model(Module):
 
         new_streams_dict = self.stream_handler.stop_recording_new_entries()
 
-	    # Output mapping:
+        # Output mapping:
         relevant_output_mappings = {}
         for om_pipeline, om_d in self.config['output_mappings'].items():
             if om_pipeline not in pipelines:    continue

@@ -1,6 +1,7 @@
 from typing import Dict, List 
 
 import math 
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -159,11 +160,31 @@ class FullyConnectedNetworkModule(Module):
                 assert len(experiences)==1, f"Provided too many input on id:{key}"
                 experiences = experiences[0]
             batch_size = experiences.size(0)
+           
+            original_shape = experiences.shape
+            if len(original_shape)>2 \
+            and original_shape[-1] == original_shape[-2]:
+                # i.e. output from CNN, just needs flattening:
+                flatdim = np.prod(original_shape[-3:])
+                experiences = experiences.reshape(*original_shape[:-3], flatdim)
+                original_shape = experiences.shape
 
-            experiences = experiences.reshape(batch_size, -1)
+            if len(original_shape)>2:
+                temporal_dims = original_shape[1:-1]
+                product_tdims = np.prod(temporal_dims)
+                experiences = experiences.view(batch_size*product_tdims, original_shape[-1])
+            
             if self.use_cuda:   experiences = experiences.cuda()
 
             features = self.layers(experiences)
+
+            if len(original_shape)>2:
+                features = features.reshape(
+                    batch_size,
+                    *temporal_dims,
+                    *features.shape[1:],
+                )
+
             outputs_stream_dict[output_key] = [features]
         
         return outputs_stream_dict 
