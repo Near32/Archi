@@ -784,7 +784,9 @@ class CaptionRNNModule(Module):
                     nn.Linear(self.mm_size, self.mm_size, bias=False),
                 ]
             self.input2mm = nn.Sequential(*input2mm)
-        self.criterion = nn.CrossEntropyLoss(reduction='none')
+        #self.criterion = nn.CrossEntropyLoss(reduction='none')
+        # MODIF: we replace the loss with NLL in order to allow input being logits:
+        self.criterion = nn.NLLLoss(reduction='none')
         
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -927,6 +929,11 @@ class CaptionRNNModule(Module):
                     eff_token_distr = eff_token_distr/(eff_token_distr.sum(dim=-1, keepdim=True)+1.0e-8)
                 else:
                     raise NotImplementedError
+                # MODIF: need to take into account the prior into the unlogit used in the loss fn:
+                #token_unlogit = eff_token_distr
+                # Note that this is not ideal as two softmax will be applied at the end of the day...
+                # It could be good to un-softmax the current token_unlogit, but I do not know it being feasible?
+                # Thus, instead, we replace the Cross entropy loss below (criterion) with a NLLLoss that expects logits.
                 token_logit = torch.log(eff_token_distr+1.0e-8)
 
             predicted_logits.append(token_logit)
@@ -955,7 +962,9 @@ class CaptionRNNModule(Module):
                     #input=token_distribution, 
                     # With CrossEntropyLoss, it is expecting unnormalized logit,
                     # and it will perform a log_softmax inside:
-                    input=token_unlogit, 
+                    #input=token_unlogit,
+                    # MODIF: we replace it with NLLLoss that expects normalized ones:
+                    input=token_logit,
                     target=gt_sentences[:, t].reshape(batch_size),
                 )
                 batched_loss *= mask
