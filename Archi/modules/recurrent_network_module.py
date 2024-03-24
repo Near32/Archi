@@ -651,6 +651,7 @@ class CaptionRNNModule(Module):
         gate=None, #F.relu, 
         dropout=0.0, 
         rnn_fn="nn.GRU",
+        loss_fn="NLL",
         id='CaptionRNNModule_0',
         config={
             "predict_PADs":False,
@@ -784,9 +785,12 @@ class CaptionRNNModule(Module):
                     nn.Linear(self.mm_size, self.mm_size, bias=False),
                 ]
             self.input2mm = nn.Sequential(*input2mm)
-        #self.criterion = nn.CrossEntropyLoss(reduction='none')
         # MODIF: we replace the loss with NLL in order to allow input being logits:
-        self.criterion = nn.NLLLoss(reduction='none')
+        self.loss_fn = loss_fn
+        if 'NLL' in loss_fn:
+            self.criterion = nn.NLLLoss(reduction='none')
+        else:
+            self.criterion = nn.CrossEntropyLoss(reduction='none')
         
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -930,7 +934,7 @@ class CaptionRNNModule(Module):
                 else:
                     raise NotImplementedError
                 # MODIF: need to take into account the prior into the unlogit used in the loss fn:
-                #token_unlogit = eff_token_distr
+                token_unlogit = eff_token_distr
                 # Note that this is not ideal as two softmax will be applied at the end of the day...
                 # It could be good to un-softmax the current token_unlogit, but I do not know it being feasible?
                 # Thus, instead, we replace the Cross entropy loss below (criterion) with a NLLLoss that expects logits.
@@ -958,15 +962,27 @@ class CaptionRNNModule(Module):
                         wandb.log({f"{self.id}/DivPerBatchToken{t}": nbr_div}, commit=False)
                     except Exception as e:
                         print(f"WARNING: W&B Logging: {e}")
-                batched_loss = self.criterion(
-                    #input=token_distribution, 
-                    # With CrossEntropyLoss, it is expecting unnormalized logit,
-                    # and it will perform a log_softmax inside:
-                    #input=token_unlogit,
-                    # MODIF: we replace it with NLLLoss that expects normalized ones:
-                    input=token_logit,
-                    target=gt_sentences[:, t].reshape(batch_size),
-                )
+                if 'NLL' in self.loss_fn:
+                    batched_loss = self.criterion(
+                        #input=token_distribution, 
+                        # With CrossEntropyLoss, it is expecting unnormalized logit,
+                        # and it will perform a log_softmax inside:
+                        #input=token_unlogit,
+                        # MODIF: we replace it with NLLLoss that expects normalized ones:
+                        input=token_logit,
+                        target=gt_sentences[:, t].reshape(batch_size),
+                    )
+                else:
+                    batched_loss = self.criterion(
+                        #input=token_distribution, 
+                        # With CrossEntropyLoss, it is expecting unnormalized logit,
+                        # and it will perform a log_softmax inside:
+                        input=token_unlogit,
+                        # MODIF: we replace it with NLLLoss that expects normalized ones:
+                        #input=token_logit,
+                        target=gt_sentences[:, t].reshape(batch_size),
+                    )
+ 
                 batched_loss *= mask
                 if self.config.get("rectify_contrastive_imbalance", False):
                     positive_loss = positive_mask*batched_loss
