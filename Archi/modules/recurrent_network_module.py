@@ -661,6 +661,7 @@ class CaptionRNNModule(Module):
             "semantic_prior_mixing":'additive',
             "input_mm_projector_BN": False,
             "semantic_embedding_init": 'none',
+            "semantic_embeddings_detach_visual_features": False,
         },
         input_stream_ids=None,
         output_stream_ids={},
@@ -845,6 +846,8 @@ class CaptionRNNModule(Module):
                 prior_x = prior_x.reshape(batch_size, 1, -1) 
             l2_mm_x = self._compute_visual_features(prior_x).transpose(2,1)
             # (batch_size x mm_size x nbr_visual_emb)
+            if self.config.get("semantic_embeddings_detach_visual_features", False):
+                l2_mm_x = l2_mm_x.detach()
             # Must be clone for it to be differentiable apparently...
             b_sem_emb = self.semantic_embedding.weight.clone().unsqueeze(0).repeat(batch_size, 1,1)
             # (batch_size x nbr_text_emb x emb_size)
@@ -942,7 +945,13 @@ class CaptionRNNModule(Module):
 
             predicted_logits.append(token_logit)
             #idxs_next_token = torch.argmax(token_distribution, dim=1)
-            logits_next_token, idxs_next_token = torch.max(token_logit, dim=1)
+            if self.training:
+                # Sampling at training time:
+                predicted_distr = torch.distributions.Categorical(logits=token_logit)
+                idxs_next_token = predicted_distr.sample()
+                logits_next_token = torch.gather(token_logit, dim=-1, index=idxs_next_token.unsqueeze(-1)).squeeze(-1)
+            else:
+                logits_next_token, idxs_next_token = torch.max(token_logit, dim=1)
             # batch_size x 1
             predicted_sentences[:, t] = idxs_next_token #.unsqueeze(-1)
             predicted_argmax_logits.append(logits_next_token)
@@ -1152,12 +1161,12 @@ class CaptionRNNModule(Module):
 
     def _rnn(self, x, h_c):
         batch_size = x.shape[0]
-        rnn_outputs, h_c = self.rnn(x, h_c)
+        rnn_outputs, updated_h_c = self.rnn(x, h_c)
         output = rnn_outputs[:,-1,...]
         if self.gate != 'None':
             output = self.gate(output)
         # batch_size x hidden_units 
-        return output, h_c
+        return output, updated_h_c
         # batch_size x sequence_length=1 x hidden_units
         # num_layer*num_directions, batch_size, hidden_units
         
