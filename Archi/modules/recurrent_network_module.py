@@ -1037,8 +1037,12 @@ class CaptionRNNModule(Module):
                     break
                 end_idx += 1
             predicted_sentences_length.append(end_idx)
-            #Compute perplexity:
-            slhd = torch.prod(torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1)))
+            #Compute perplexity: 
+            # CSGPU2 cuda drive error technical debt:
+            #slhd = torch.prod(torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1)))
+            slhd = torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1))
+            slhd = slhd.cpu().prod().to(slhd.device)
+
             # unstable : torch.prod(predicted_argmax_logits[b,:end_idx+1].exp(), keepdim=False)
             #perplexity = torch.pow(1.0/slhd, 1.0/(end_idx+1))
             perplexity = 1.0/(slhd+1e-8)
