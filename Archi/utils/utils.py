@@ -13,6 +13,27 @@ from concurrent.futures import ProcessPoolExecutor
 
 eps = 1e-20
 
+def STR2BT(sentences):
+    if isinstance(sentences, str):
+        sentences = [sentences]
+    max_sentence_length = 0
+    btss = []
+    for s in sentences:
+        bts = torch.ByteTensor(list(bytes(s, 'utf-8')))
+        if max_sentence_length < bts.shape[0]:  max_sentence_length = bts.shape[0]
+        btss.append(bts)
+    ret = torch.zeros((len(btss), max_sentence_length), dtype=torch.uint8)
+    for bts_idx, bts, in enumerate(btss):
+        ret[bts_idx, :bts.shape[0]] = bts
+    return ret
+
+def BT2STR(bt):
+    sentences = []
+    for idx in range(bt.shape[0]):
+        sentence = "".join(map(chr,bt[idx].tolist())).replace('\x00','')
+        sentences.append(sentence)
+    return sentences
+
 def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10, dim=-1):
     # type: (Tensor, float, bool, float, int) -> Tensor
     """
@@ -100,8 +121,6 @@ class StraightThroughGumbelSoftmaxLayer(nn.Module):
       eps=1e-6)
     return one_hot_distr
                     
-
-
 
 def cardinality(data):
     if isinstance(data[0], np.ndarray):
