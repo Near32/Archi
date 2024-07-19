@@ -125,11 +125,13 @@ class ArchiTransformerModule(Module):
         If :param gt_sentences: is not `None`,
         then teacher forcing is implemented...
         '''
+        split_options = False
+
         if gt_sentences is not None:
             gt_sentences = gt_sentences.long().to(x.device)
         
         if isinstance(x, dict):
-            # If input is already tokenized?
+            # If input is already tokenized? and we will want to backpropagate through it#TODO?
             batched_inputs = x
         elif isinstance(x, torch.Tensor): 
             # or it only contains input_ids (after ST-GS maybe?)
@@ -151,13 +153,34 @@ class ArchiTransformerModule(Module):
             elif x.dtype==torch.uint8:
                 # it is a byteTensor from string:
                 decoded_x = BT2STR(x)
-                
-            batched_inputs = self.tokenizer(
-                decoded_x,
-                padding=True,
-                #truncation=True,
-                return_tensors='pt',
-            )   
+                # Are there options?
+                if '[OPTION]' in decoded_x[0]:
+                    split_options = True
+                    prompts = [dx.split('[/PROMPT]')[0] for dx in decoded_x]
+                    options = [dx.split('[/PROMPT]')[1].split('[OPTION]') for dx in decoded_x]
+                    orig_padding_side = self.tokenizer.padding_side
+                    self.tokenizer.padding_size = 'left'
+                    batched_prompts_inputs = self.tokenizer(
+                        prompts,
+                        padding=True,
+                        return_tensors='pt',
+                    )
+                    self.tokenizer.padding_side = 'right'
+                    list_batched_options_inputs = [
+                        self.tokenizer(
+                            opt,
+                            padding=True,
+                            return_tensors='pt',
+                        ) for opt in options
+                    ]
+                    self.tokenizer.padding_side = orig_padding_side
+                else:
+                    batched_inputs = self.tokenizer(
+                        decoded_x,
+                        padding=True,
+                        #truncation=True,
+                        return_tensors='pt',
+                    )   
         elif isinstance(x, np.ndarray):
             # Or expecting inputs to be made of strings, as numpy array:
             assert len(x.shape) == 1 and isinstance(x[0], str)
@@ -169,7 +192,127 @@ class ArchiTransformerModule(Module):
             )
         else:
             raise NotImplementedError
+        
+        if not split_options:
+            return self._forward_inference(
+                output_dict=output_dict,
+                batched_inputs=batched_inputs,
+                gt_sentences=gt_sentences,
+            )
+        
+        return self._forward_options(
+            output_dict=output_dict,
+            batched_prompts_inputs=batched_prompts_inputs,
+            list_batched_options_inputs=list_batched_options_inputs,
+        )
 
+    def _forward_options(
+        self,
+        output_dict,
+        batched_prompts_inputs,
+        list_batched_options_inputs,
+    ):
+        prompts_batch_size = batched_prompts_inputs['input_ids'].shape[0]
+        batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
+
+        #Forward prompts and retrieve past_key_values:
+        outputs = self.model(
+            **batched_prompts_inputs,
+            use_cache=True,
+            output_attentions=True,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        past_key_values = outputs.past_key_values
+        # (batch_size x num_heads x sequence_length x embed_size_per_head)
+
+        # Compute the different options for each prompt:
+        max_option_len = 0
+        max_option_batch_size = 0
+        list_options_outputs = []
+        list_predicted_logits = []
+        list_options_likelihoods = []
+        list_options_perplexities = []
+        for prompt_idx in range(prompts_batch_size):
+            prompt_len = batched_prompts_inputs['input_ids'].shape[1]
+            batched_options_inputs = list_batched_options_inputs[prompt_idx].to(self.model.device)
+            option_batch_size, option_len = batched_options_inputs['input_ids'].shape[0:2]
+            max_option_batch_size = max(max_option_batch_size, option_batch_size)
+            max_option_len = max(max_option_len, option_len)
+            #  Select and Repeat pkv to fit to new input batch_size:
+            pkv = [
+                [
+                    pkv_t[prompt_idx:prompt_idx+1, ...].repeat(option_batch_size,1, 1, 1)
+                    for pkv_t in pkv_tuple
+                ] for pkv_tuple in past_key_values
+            ]
+            # Check that attention and other elements are ok?
+            option_outputs = self.model(
+                input_ids=batched_options_inputs.input_ids,
+                # WARNING: providing the attention_mask is not working, but not necessary since we have right-padded the options.
+                # right-pads will be masked out in the computation of the likelihood/perplexity below.
+                use_cache=True,
+                past_key_values=pkv,
+                #cache_position=torch.arange(prompt_len+1,prompt_len+1+option_len),
+                return_dict=True,
+            )
+            list_options_outputs.append(option_outputs)
+
+            predicted_logits = option_outputs.logits
+            list_predicted_logits.append(predicted_logits)
+            # batch_size x max_sentence_length x vocab_size 
+
+            predicted_sentences_length = []
+            sentences_likelihoods = []
+            sentences_perplexities = []
+    
+            #Compute perplexity:
+            pl = predicted_logits
+            #(option_batch_size x max_seq_len x vocab_size)
+            softmaxed_pl = pl.softmax(dim=-1)
+            slhd = softmaxed_pl.gather(dim=-1, index=batched_options_inputs.input_ids.unsqueeze(-1)).squeeze(-1)
+            options_true_length = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
+            #(option_batch_size x 1)
+            slhd = torch.pow(slhd, 1.0/options_true_length)
+            #(option_batch_size x option_len)
+            notpadding_mask = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long()
+            slhd = notpadding_mask*slhd+(1-notpadding_mask)*torch.ones_like(slhd)
+            sentences_likelihoods = slhd #= slhd.cpu().prod(dim=-1).to(slhd.device)
+            #(option_batch_size x option_len )
+            sentences_perplexities = 1.0/(slhd+1e-8)
+            # (option_batch_size x option_len)
+            
+            list_options_likelihoods.append(sentences_likelihoods)
+            list_options_perplexities.append(sentences_perplexities)
+        
+        # Stack all predicted_logits:
+        spredicted_logits = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, predicted_logits.shape[-1])
+        soptions_likelihoods = torch.ones(prompts_batch_size, max_option_batch_size, max_option_len)
+        soptions_perplexities = torch.ones(prompts_batch_size, max_option_batch_size, max_option_len)
+        for pidx in range(prompts_batch_size):
+            opt_logits = list_predicted_logits[pidx]
+            spredicted_logits[pidx,:opt_logits.shape[0],:opt_logits.shape[1],...] = opt_logits
+            opt_lhd = list_options_likelihoods[pidx]
+            soptions_likelihoods[pidx,:opt_lhd.shape[0],:opt_lhd.shape[1]] = opt_lhd
+            opt_ppl = list_options_perplexities[pidx]
+            soptions_perplexities[pidx,:opt_ppl.shape[0],:opt_ppl.shape[1]] = opt_ppl
+
+        if output_dict is not None:
+            output_dict.update({
+                'prediction_logits': spredicted_logits,
+                'prediction_likelihoods': soptions_likelihoods,
+                'prediction_perplexities': soptions_perplexities, 
+            })
+
+        return spredicted_logits
+ 
+    
+    def _forward_inference(
+        self,
+        output_dict,
+        batched_inputs,
+        gt_sentences,
+    ):
         batch_size = batched_inputs['input_ids'].shape[0]
         batch_inputs = batched_inputs.to(self.model.device)
 
@@ -215,48 +358,21 @@ class ArchiTransformerModule(Module):
         else:
             loss_per_item = torch.zeros(batch_size).to(self.model.device)
 
-        EoS_count = 0
-        predicted_sentences_length = []
-        sentences_likelihoods = []
-        sentences_perplexities = []
-
+        #Compute perplexity:
         pl = torch.stack(predicted_logits, dim=1)
+        #(batch_size x max_seq_len x vocab_size)
         softmaxed_pl = pl.softmax(dim=-1)
-        for b in range(batch_size):
-            end_idx = 0
-            for idx_t in range(predicted_sentences.shape[1]):
-                if predicted_sentences[b,idx_t] == self.tokenizer.eos_token_id: #self.w2idx['EoS']:
-                    EoS_count += 1
-                    predicted_sentences[b, idx_t+1:] = self.tokenizer.eos_token_id #self.w2idx['EoS']
-                    break
-                end_idx += 1
-            predicted_sentences_length.append(end_idx)
-            #Compute perplexity: 
-            # CSGPU2 cuda drive error technical debt:
-            #slhd = torch.prod(torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1)))
-            # Dealing with misalignement of predicted_sentences and predicted_logits:
-            # previously: slhd = torch.pow(predicted_argmax_logits[b,:end_idx+1].exp(), 1.0/(end_idx+1))
-            # now:
-            slhd = softmaxed_pl[b].gather(dim=-1, index=predicted_sentences[b,batched_inputs.input_ids.shape[1]:].unsqueeze(-1)).squeeze()
-            slhd = torch.pow(slhd, 1.0/slhd.shape[0])
-            notpadding_mask = (predicted_sentences[b, batched_inputs.input_ids.shape[1]:] != self.tokenizer.pad_token_id).long()
-            slhd = notpadding_mask*slhd+(1-notpadding_mask)*torch.ones_like(slhd)
-            slhd = slhd.cpu().prod().to(slhd.device)
-
-            # unstable : torch.prod(predicted_argmax_logits[b,:end_idx+1].exp(), keepdim=False)
-            #perplexity = torch.pow(1.0/slhd, 1.0/(end_idx+1))
-            perplexity = 1.0/(slhd+1e-8)
-            sentences_likelihoods.append(slhd)
-            sentences_perplexities.append(perplexity)
-        
-        sentences_likelihoods = torch.stack(sentences_likelihoods, dim=-1)
-        sentences_perplexities = torch.stack(sentences_perplexities, dim=-1)
-        # batch_size 
-        
-        try:
-            wandb.log({f"{self.id}/EoSRatioPerBatch":float(EoS_count)/batch_size}, commit=False)
-        except Exception as e:
-            print(f"WARNING: W&B Logging: {e}")
+        slhd = softmaxed_pl.gather(dim=-1, index=predicted_sentences[:,batched_inputs.input_ids.shape[1]:].unsqueeze(-1)).squeeze(-1)
+        true_length = (predicted_sentences != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
+        #(batch_size x 1)
+        slhd = torch.pow(slhd, 1.0/true_length)
+        #(batch_size x max_seq_len)
+        notpadding_mask = (predicted_sentences[:,batched_inputs.input_ids.shape[1]:] != self.tokenizer.pad_token_id).long()
+        slhd = notpadding_mask*slhd+(1-notpadding_mask)*torch.ones_like(slhd)
+        sentences_likelihoods = slhd #= slhd.cpu().prod(dim=-1).to(slhd.device)
+        #(batch_size x max_seq_len )
+        sentences_perplexities = 1.0/(slhd+1e-8)
+        # (batch_size x max_seq_len)
         
         decoded_predictions = [self.tokenizer.decode(s) for s in predicted_sentences] 
         byte_prediction_sentences = STR2BT(decoded_predictions)
