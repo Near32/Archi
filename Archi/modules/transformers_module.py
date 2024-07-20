@@ -10,6 +10,7 @@ from Archi.modules.utils import (
     apply_on_hdict,
 )
 
+import transformers
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
@@ -163,24 +164,37 @@ class ArchiTransformerModule(Module):
                     batched_prompts_inputs = self.tokenizer(
                         prompts,
                         padding=True,
+                        add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
                         return_tensors='pt',
                     )
                     self.tokenizer.padding_side = 'right'
-                    list_batched_options_inputs = [
-                        self.tokenizer(
-                            opt,
+                    list_batched_options_inputs = []
+                    for pidx, opts in enumerate(options):
+                        prompt = prompts[pidx]
+                        prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
+                        #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
+                        popts = [prompt+opt for opt in opts]
+                        t_popts = self.tokenizer(
+                            popts,
                             padding=True,
+                            add_special_tokens=False, #TODO: figure out whether it is necessary or not
                             return_tensors='pt',
-                        ) for opt in options
-                    ]
+                        )
+                        # Remove the prompt elements:
+                        for k in t_popts:
+                            t_popts[k] = t_popts[k][:, prompt_len:]
+                        list_batched_options_inputs.append(t_popts)
                     self.tokenizer.padding_side = orig_padding_side
                 else:
+                    orig_padding_side = self.tokenizer.padding_side
+                    self.tokenizer.padding_side = 'right'
                     batched_inputs = self.tokenizer(
                         decoded_x,
                         padding=True,
                         #truncation=True,
                         return_tensors='pt',
                     )   
+                    self.tokenizer.padding_side = orig_padding_side
         elif isinstance(x, np.ndarray):
             # Or expecting inputs to be made of strings, as numpy array:
             assert len(x.shape) == 1 and isinstance(x[0], str)
@@ -216,15 +230,22 @@ class ArchiTransformerModule(Module):
         batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
 
         #Forward prompts and retrieve past_key_values:
+        cache = transformers.DynamicCache()
         outputs = self.model(
             **batched_prompts_inputs,
             use_cache=True,
+            past_key_values=cache,
             output_attentions=True,
             output_hidden_states=True,
             return_dict=True,
         )
-        past_key_values = outputs.past_key_values
+        #past_key_values = outputs.past_key_values
+        prompts_predicted_logits = outputs.logits
+        cache = outputs.past_key_values
+        past_key_values = cache.to_legacy_cache()
         # (batch_size x num_heads x sequence_length x embed_size_per_head)
+        '''
+        '''
 
         # Compute the different options for each prompt:
         max_option_len = 0
@@ -232,33 +253,85 @@ class ArchiTransformerModule(Module):
         list_options_outputs = []
         list_predicted_logits = []
         list_options_likelihoods = []
+        llist_options_likelihoods = []
         list_options_perplexities = []
+        llist_options_perplexities = []
+
+        tokenized_predictions = []
+        tokenized_option_predictions = []
         for prompt_idx in range(prompts_batch_size):
             prompt_len = batched_prompts_inputs['input_ids'].shape[1]
             batched_options_inputs = list_batched_options_inputs[prompt_idx].to(self.model.device)
             option_batch_size, option_len = batched_options_inputs['input_ids'].shape[0:2]
             max_option_batch_size = max(max_option_batch_size, option_batch_size)
-            max_option_len = max(max_option_len, option_len)
-            #  Select and Repeat pkv to fit to new input batch_size:
+            #max_option_len = max(max_option_len, option_len)
+            max_option_len = max(max_option_len, option_len+prompt_len)
+            # Select and Repeat pkv to fit to new input batch_size:
             pkv = [
                 [
-                    pkv_t[prompt_idx:prompt_idx+1, ...].repeat(option_batch_size,1, 1, 1)
+                    pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size,1, 1, 1)
                     for pkv_t in pkv_tuple
                 ] for pkv_tuple in past_key_values
             ]
+            
+            pkv = transformers.DynamicCache.from_legacy_cache(pkv)
             # Check that attention and other elements are ok?
+            tokenized_option_predictions.append(batched_options_inputs.input_ids)
+            tokenized_prediction = torch.cat([
+                batched_prompts_inputs.input_ids[prompt_idx:prompt_idx+1].repeat(option_batch_size, 1),
+                batched_options_inputs.input_ids],
+                dim=-1,
+            )
+            tokenized_predictions.append(tokenized_prediction)
             option_outputs = self.model(
                 input_ids=batched_options_inputs.input_ids,
                 # WARNING: providing the attention_mask is not working, but not necessary since we have right-padded the options.
                 # right-pads will be masked out in the computation of the likelihood/perplexity below.
                 use_cache=True,
                 past_key_values=pkv,
-                #cache_position=torch.arange(prompt_len+1,prompt_len+1+option_len),
+                cache_position=torch.arange(prompt_len,prompt_len+option_len),
                 return_dict=True,
             )
+            '''
+
+            # Testing without pkv:
+            nc_batched_options_inputs = {}
+            for k in batched_options_inputs.keys():
+                #nc_batched_options_inputs[k] = torch.cat(
+                batched_options_inputs[k] = torch.cat(
+                        [batched_prompts_inputs[k][prompt_idx:prompt_idx+1].repeat(option_batch_size, 1), batched_options_inputs[k]], 
+                    dim=-1,
+                )
+            print(repr(self.tokenizer.decode(batched_options_inputs.input_ids[0])))
+            import ipdb; ipdb.set_trace()
+            option_outputs = nc_option_outputs = self.model(
+                #**nc_batched_options_inputs,
+                **batched_options_inputs,
+                use_cache=False,
+                return_dict=True,
+            )
+            '''
+            '''
+            nc_logits = nc_option_outputs.logits
+            same_nc_logits = nc_logits[:, prompt_len:]
+            '''
+
             list_options_outputs.append(option_outputs)
 
+            '''
             predicted_logits = option_outputs.logits
+            diff = (predicted_logits - same_nc_logits)
+            print(diff)
+            print(diff.mean(), diff.std(), diff.max())
+            import ipdb; ipdb.set_trace()
+            '''
+            predicted_logits = option_outputs.logits
+            all_predicted_logits = torch.cat([
+                prompts_predicted_logits[prompt_idx:prompt_idx+1].repeat(option_batch_size, 1, 1),
+                predicted_logits],
+                dim=1,
+            )
+
             list_predicted_logits.append(predicted_logits)
             # batch_size x max_sentence_length x vocab_size 
 
@@ -285,6 +358,29 @@ class ArchiTransformerModule(Module):
             list_options_likelihoods.append(sentences_likelihoods)
             list_options_perplexities.append(sentences_perplexities)
         
+            #Compute perplexity with log:
+            lpl = all_predicted_logits #predicted_logits
+            #(option_batch_size x max_seq_len x vocab_size)
+            lsoftmaxed_pl = lpl.log_softmax(dim=-1)
+            #lslhd = lsoftmaxed_pl.gather(dim=-1, index=batched_options_inputs.input_ids.unsqueeze(-1)).squeeze(-1)
+            lslhd = lsoftmaxed_pl.gather(dim=-1, index=tokenized_prediction.unsqueeze(-1)).squeeze(-1)
+            #lnotpadding_mask = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).float()
+            lnotpadding_mask = (tokenized_prediction != self.tokenizer.pad_token_id).float()
+            #options_true_length = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
+            #(option_batch_size x 1)
+            lslhd = lnotpadding_mask * lslhd
+            #torch.pow(slhd, 1.0/options_true_length)
+            #(option_batch_size x option_len)
+            print('cache option: ', lslhd.shape)
+            print(lslhd)
+            lsentences_likelihoods = lslhd.sum(dim=-1) #= slhd.cpu().prod(dim=-1).to(slhd.device)
+            #(option_batch_size x option_len )
+            lsentences_perplexities = torch.exp(-lsentences_likelihoods / (lnotpadding_mask.sum(dim=-1)+1e-8)) #1.0/(slhd+1e-8)
+            # (option_batch_size x option_len)
+            
+            llist_options_likelihoods.append(lsentences_likelihoods)
+            llist_options_perplexities.append(lsentences_perplexities)
+        
         # Stack all predicted_logits:
         spredicted_logits = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, predicted_logits.shape[-1])
         soptions_likelihoods = torch.ones(prompts_batch_size, max_option_batch_size, max_option_len)
@@ -292,16 +388,77 @@ class ArchiTransformerModule(Module):
         for pidx in range(prompts_batch_size):
             opt_logits = list_predicted_logits[pidx]
             spredicted_logits[pidx,:opt_logits.shape[0],:opt_logits.shape[1],...] = opt_logits
+
             opt_lhd = list_options_likelihoods[pidx]
             soptions_likelihoods[pidx,:opt_lhd.shape[0],:opt_lhd.shape[1]] = opt_lhd
+            # Regularise when there is less than max_option_batch_size options for this particular prompt:
+            soptions_likelihoods[pidx,opt_lhd.shape[0]:] = 0
+            
             opt_ppl = list_options_perplexities[pidx]
             soptions_perplexities[pidx,:opt_ppl.shape[0],:opt_ppl.shape[1]] = opt_ppl
+            # Regularise when there is less than max_option_batch_size options for this particular prompt:
+            soptions_perplexities[pidx,opt_ppl.shape[0]:] = 0
 
+        # Stack all predicted_logits with log:
+        lsoptions_likelihoods = (-torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
+        lsoptions_perplexities = (torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
+        for pidx in range(prompts_batch_size):
+            opt_lhd = llist_options_likelihoods[pidx]
+            lsoptions_likelihoods[pidx,:opt_lhd.shape[0]] = opt_lhd
+            
+            opt_ppl = llist_options_perplexities[pidx]
+            lsoptions_perplexities[pidx,:opt_ppl.shape[0]] = opt_ppl
+        
+        # Option choosing:
+        soptions_probs = soptions_likelihoods.prod(dim=-1)
+        # (prompt_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            chosen_options = torch.multinomial(soptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x 1)
+        else:
+            chosen_options = soptions_probs.argmax(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x 1)
+        
+        # Option choosing with log:
+        lsoptions_probs = lsoptions_perplexities #lsoptions_likelihoods
+        # (prompt_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x 1)
+        else:
+            #lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x 1)
+        
         if output_dict is not None:
+            tokenized_option_predictions = torch.cat(
+                [
+                    tk if tk.shape[1]==max_option_len else torch.cat([tk, torch.zeros(max_option_batch_size, max_option_len-tk.shape[1]).to(tk.device)], dim=-1)
+                for tk in tokenized_option_predictions],
+                dim=0,
+            )
+            tokenized_predictions = torch.cat(
+                [
+                    tk if tk.shape[1]==max_option_len else torch.cat([tk, torch.zeros(max_option_batch_size, max_option_len-tk.shape[1]).to(tk.device)], dim=-1)
+                for tk in tokenized_predictions],
+                dim=0,
+            )
             output_dict.update({
+                'tokenized_option_prediction': tokenized_option_predictions,
+                'tokenized_prediction': tokenized_predictions,
+                'lchosen_options': lchosen_options,
+                'chosen_options': chosen_options,
                 'prediction_logits': spredicted_logits,
                 'prediction_likelihoods': soptions_likelihoods,
+                'lprediction_likelihoods': lsoptions_likelihoods,
                 'prediction_perplexities': soptions_perplexities, 
+                'lprediction_perplexities': lsoptions_perplexities, 
             })
 
         return spredicted_logits
@@ -317,6 +474,7 @@ class ArchiTransformerModule(Module):
         batch_inputs = batched_inputs.to(self.model.device)
 
         if gt_sentences is None:
+            '''
             outputs = self.model.generate(
                 **batched_inputs,
                 **self.generation_kwargs,
@@ -326,7 +484,20 @@ class ArchiTransformerModule(Module):
                 output_scores=True, 
                 output_logits=True, 
                 output_attentions=True, 
-                use_cache=True, 
+                use_cache=False,#True, 
+            )
+            '''
+            outputs = self.model(
+                #**batched_inputs,
+                input_ids=batched_inputs.input_ids,
+                #**self.generation_kwargs,
+                #tokenizer=self.tokenizer,
+                return_dict=True,
+                #output_hidden_states=True, 
+                #output_scores=True, 
+                #output_logits=True, 
+                #output_attentions=True, 
+                use_cache=False,#True, 
             )
         else:
             outputs = self.model(
@@ -341,7 +512,7 @@ class ArchiTransformerModule(Module):
         predicted_logits = outputs.logits
         # batch_size x max_sentence_length x vocab_size 
         #TODO: extract with ST-GS maybe?
-        predicted_sentences = outputs.sequences #predicted_argmax_logits = outputs.logits.argmax(dim=-1)
+        predicted_sentences = batched_inputs.input_ids #outputs.sequences #predicted_argmax_logits = outputs.logits.argmax(dim=-1)
         # batch_size x max_sentence_length - with padding... 
 
         # Compute loss:
@@ -359,20 +530,38 @@ class ArchiTransformerModule(Module):
             loss_per_item = torch.zeros(batch_size).to(self.model.device)
 
         #Compute perplexity:
-        pl = torch.stack(predicted_logits, dim=1)
+        pl = predicted_logits #torch.stack(predicted_logits, dim=1)
         #(batch_size x max_seq_len x vocab_size)
         softmaxed_pl = pl.softmax(dim=-1)
-        slhd = softmaxed_pl.gather(dim=-1, index=predicted_sentences[:,batched_inputs.input_ids.shape[1]:].unsqueeze(-1)).squeeze(-1)
+        slhd = softmaxed_pl.gather(dim=-1, index=predicted_sentences.unsqueeze(-1)).squeeze(-1)
         true_length = (predicted_sentences != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
         #(batch_size x 1)
         slhd = torch.pow(slhd, 1.0/true_length)
         #(batch_size x max_seq_len)
-        notpadding_mask = (predicted_sentences[:,batched_inputs.input_ids.shape[1]:] != self.tokenizer.pad_token_id).long()
+        notpadding_mask = (predicted_sentences != self.tokenizer.pad_token_id).long()
         slhd = notpadding_mask*slhd+(1-notpadding_mask)*torch.ones_like(slhd)
         sentences_likelihoods = slhd #= slhd.cpu().prod(dim=-1).to(slhd.device)
         #(batch_size x max_seq_len )
         sentences_perplexities = 1.0/(slhd+1e-8)
         # (batch_size x max_seq_len)
+        
+        #Compute perplexity with log:
+        lpl = pl #predicted_logits
+        #(option_batch_size x max_seq_len x vocab_size)
+        lsoftmaxed_pl = lpl.log_softmax(dim=-1)
+        lslhd = lsoftmaxed_pl.gather(dim=-1, index=predicted_sentences.unsqueeze(-1)).squeeze(-1)
+        lnotpadding_mask = (predicted_sentences != self.tokenizer.pad_token_id).float()
+        #options_true_length = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
+        #(option_batch_size x 1)
+        lslhd = lnotpadding_mask * lslhd
+        #torch.pow(slhd, 1.0/options_true_length)
+        #(option_batch_size x option_len)
+        print(lslhd.shape)
+        print(lslhd)
+        lsentences_likelihoods = lslhd.sum(dim=-1) #= slhd.cpu().prod(dim=-1).to(slhd.device)
+        #(option_batch_size x option_len )
+        lsentences_perplexities = torch.exp(-lsentences_likelihoods / (lnotpadding_mask.sum(dim=-1)+1e-8)) #1.0/(slhd+1e-8)
+        # (option_batch_size x option_len)
         
         decoded_predictions = [self.tokenizer.decode(s) for s in predicted_sentences] 
         byte_prediction_sentences = STR2BT(decoded_predictions)
@@ -384,6 +573,7 @@ class ArchiTransformerModule(Module):
                 'prediction_logits':pl, #predicted_logits,
                 'prediction_likelihoods':sentences_likelihoods,
                 'prediction_perplexities':sentences_perplexities, 
+                'lprediction_perplexities':lsentences_perplexities, 
             })
 
         return predicted_sentences
