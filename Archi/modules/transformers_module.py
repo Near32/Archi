@@ -241,6 +241,8 @@ class ArchiTransformerModule(Module):
         )
         #past_key_values = outputs.past_key_values
         prompts_predicted_logits = outputs.logits
+        prompts_lhidden_states = outputs.hidden_states[-1]
+        # (batch_size x sequence_length x embed_size_per_head)
         cache = outputs.past_key_values
         past_key_values = cache.to_legacy_cache()
         # (batch_size x num_heads x sequence_length x embed_size_per_head)
@@ -257,6 +259,7 @@ class ArchiTransformerModule(Module):
         list_options_perplexities = []
         llist_options_perplexities = []
 
+        list_lhidden_states = []
         tokenized_predictions = []
         tokenized_option_predictions = []
         for prompt_idx in range(prompts_batch_size):
@@ -287,13 +290,14 @@ class ArchiTransformerModule(Module):
                 input_ids=batched_options_inputs.input_ids,
                 # WARNING: providing the attention_mask is not working, but not necessary since we have right-padded the options.
                 # right-pads will be masked out in the computation of the likelihood/perplexity below.
+                output_hidden_states=True,
                 use_cache=True,
                 past_key_values=pkv,
                 cache_position=torch.arange(prompt_len,prompt_len+option_len),
                 return_dict=True,
             )
+            
             '''
-
             # Testing without pkv:
             nc_batched_options_inputs = {}
             for k in batched_options_inputs.keys():
@@ -317,14 +321,17 @@ class ArchiTransformerModule(Module):
             '''
 
             list_options_outputs.append(option_outputs)
-
-            '''
-            predicted_logits = option_outputs.logits
-            diff = (predicted_logits - same_nc_logits)
-            print(diff)
-            print(diff.mean(), diff.std(), diff.max())
-            import ipdb; ipdb.set_trace()
-            '''
+            option_lhidden_states = option_outputs.hidden_states[-1]
+            # (option_batch_size x sequence_length x embed_per_head_size)
+            prompt_lhidden_states = prompts_lhidden_states[prompt_idx].repeat(option_batch_size, 1, 1)
+            full_lhidden_states = torch.cat([
+                prompt_lhidden_states,
+                option_lhidden_states],
+                dim=1,
+            )
+            # (option_batch_size x prompt_len + option_len x embed_size)
+            list_lhidden_states.append(full_lhidden_states)
+            
             predicted_logits = option_outputs.logits
             all_predicted_logits = torch.cat([
                 prompts_predicted_logits[prompt_idx:prompt_idx+1].repeat(option_batch_size, 1, 1),
@@ -380,6 +387,13 @@ class ArchiTransformerModule(Module):
             
             llist_options_likelihoods.append(lsentences_likelihoods)
             llist_options_perplexities.append(lsentences_perplexities)
+        
+        # Stack all the hidden_states:
+        hidden_states_size = list_lhidden_states[-1].shape[-1]
+        slhidden_states = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, hidden_states_size)
+        for pidx in range(prompts_batch_size):
+            opt_lhs = list_lhidden_states[pidx]
+            slhidden_states[pidx, :opt_lhs.shape[0], :opt_lhs.shape[1], ...] = opt_lhs
         
         # Stack all predicted_logits:
         spredicted_logits = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, predicted_logits.shape[-1])
@@ -450,6 +464,7 @@ class ArchiTransformerModule(Module):
                 dim=0,
             )
             output_dict.update({
+                'last_hidden_states': slhidden_states,
                 'tokenized_option_prediction': tokenized_option_predictions,
                 'tokenized_prediction': tokenized_predictions,
                 'lchosen_options': lchosen_options,
@@ -493,13 +508,15 @@ class ArchiTransformerModule(Module):
                 #**self.generation_kwargs,
                 #tokenizer=self.tokenizer,
                 return_dict=True,
-                #output_hidden_states=True, 
+                output_hidden_states=True, 
                 #output_scores=True, 
                 #output_logits=True, 
                 #output_attentions=True, 
                 use_cache=False,#True, 
             )
         else:
+            raise NotImplementedError
+            # TODO
             outputs = self.model(
                 **batched_inputs,
                 labels=gt_sentences,
@@ -509,6 +526,8 @@ class ArchiTransformerModule(Module):
                 return_dict=True,
             )
 
+        slhidden_states = outputs.hidden_states[-1]
+        # (batch_size x sequence_length x embed_size_per_head)
         predicted_logits = outputs.logits
         # batch_size x max_sentence_length x vocab_size 
         #TODO: extract with ST-GS maybe?
@@ -568,6 +587,7 @@ class ArchiTransformerModule(Module):
         if output_dict is not None:
             output_dict.update({
                 'loss': loss_per_item,
+                'last_hidden_states': slhidden_states,
                 'tokenized_prediction':predicted_sentences, 
                 'byte_prediction': byte_prediction_sentences, 
                 'prediction_logits':pl, #predicted_logits,
