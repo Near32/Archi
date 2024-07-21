@@ -437,7 +437,8 @@ class ArchiTransformerModule(Module):
             # (prompt_batch_size x 1)
         
         # Option choosing with log:
-        lsoptions_probs = lsoptions_perplexities #lsoptions_likelihoods
+        lsoptions_probs = lsoptions_likelihoods.softmax(dim=-1)
+        #lsoptions_probs = lsoptions_perplexities 
         # (prompt_batch_size x max_option_batch_size
         if False: #TODO debug self.training:
             #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
@@ -446,11 +447,21 @@ class ArchiTransformerModule(Module):
             lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
             # (prompt_batch_size x 1)
         else:
-            #lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
-            lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            #lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
             # (prompt_batch_size x 1)
         
+        # Legal choices:
+        legal_choices = (lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_option_batch_size)
+
         if output_dict is not None:
+            # regularise for max_option_batch_size:
+            tokenized_option_predictions = [
+                tk if tk.shape[0]==max_option_batch_size else torch.cat([tk, torch.zeros(max_option_batch_size-tk.shape[0], tk.shape[1]).to(tk.device)], dim=0)
+                for tk in tokenized_option_predictions
+            ]
+            # regularise for max_option_len:
             tokenized_option_predictions = torch.cat(
                 [
                     tk if tk.shape[1]==max_option_len else torch.cat([tk, torch.zeros(max_option_batch_size, max_option_len-tk.shape[1]).to(tk.device)], dim=-1)
@@ -464,6 +475,9 @@ class ArchiTransformerModule(Module):
                 dim=0,
             )
             output_dict.update({
+                'legal_choices': legal_choices,
+                # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+                'last_token_last_hidden_states': slhidden_states[:,:,-1,...],
                 'last_hidden_states': slhidden_states,
                 'tokenized_option_prediction': tokenized_option_predictions,
                 'tokenized_prediction': tokenized_predictions,
@@ -471,6 +485,7 @@ class ArchiTransformerModule(Module):
                 'chosen_options': chosen_options,
                 'prediction_logits': spredicted_logits,
                 'prediction_likelihoods': soptions_likelihoods,
+                'lprediction_probs': lsoptions_probs,
                 'lprediction_likelihoods': lsoptions_likelihoods,
                 'prediction_perplexities': soptions_perplexities, 
                 'lprediction_perplexities': lsoptions_perplexities, 
@@ -582,11 +597,18 @@ class ArchiTransformerModule(Module):
         lsentences_perplexities = torch.exp(-lsentences_likelihoods / (lnotpadding_mask.sum(dim=-1)+1e-8)) #1.0/(slhd+1e-8)
         # (option_batch_size x option_len)
         
+        # Legal choices:
+        # TODO: adapt from options, but unlikely to be feasible
+        #legal_choices = (lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_option_batch_size)
+
         decoded_predictions = [self.tokenizer.decode(s) for s in predicted_sentences] 
         byte_prediction_sentences = STR2BT(decoded_predictions)
         if output_dict is not None:
             output_dict.update({
                 'loss': loss_per_item,
+                # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+                'last_token_last_hidden_states': slhidden_states[:,-1,...],
                 'last_hidden_states': slhidden_states,
                 'tokenized_prediction':predicted_sentences, 
                 'byte_prediction': byte_prediction_sentences, 

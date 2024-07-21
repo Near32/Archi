@@ -9,7 +9,26 @@ import torch.nn.functional as F
 from Archi.modules.module import Module 
 from Archi.modules.utils import layer_init
 
-from regym.rl_algorithms.networks import DuelingLayer, NoisyLinear, EPS
+from regym.rl_algorithms.networks import NoisyLinear, EPS
+
+
+class DuelingLayer(nn.Module):
+    def __init__(self, input_dim, action_dim, layer_fn=nn.Linear, layer_init_fn=layer_init):
+        super(DuelingLayer, self).__init__()
+        self.input_dim = input_dim
+        self.action_dim = action_dim
+
+        self.advantage = layer_fn(self.input_dim, self.action_dim)
+        self.value = layer_fn(self.input_dim, 1)
+
+        if layer_init_fn is not None:
+            self.apply(layer_init_fn)
+
+    def forward(self, fx):
+        v = self.value(fx)
+        adv = self.advantage(fx)
+        return v.expand_as(adv) + (adv - adv.mean(1, keepdim=True).expand_as(adv))
+
 
 
 class RLCategoricalHeadModule(Module):
@@ -19,6 +38,7 @@ class RLCategoricalHeadModule(Module):
         action_dim,
         noisy=False,
         dueling=False,
+        action_logits_from_probs=False,
         id='RLCategoricalHeadModule_0', 
         config=None,
         input_stream_ids=None,
@@ -40,6 +60,7 @@ class RLCategoricalHeadModule(Module):
         self.action_dim = action_dim
         self.dueling = dueling
         self.noisy = noisy 
+        self.action_logits_from_probs = action_logits_from_probs
 
         layer_fn = nn.Linear 
         if self.noisy:  layer_fn = NoisyLinear
@@ -74,6 +95,9 @@ class RLCategoricalHeadModule(Module):
         self.apply(reset_noisy_layer)
 
     def forward(self, phi_features):
+        if len(phi_features.shape) > 2:
+            bs = phi_features.shape[0]
+            phi_features = phi_features.reshape(bs, -1)
         qa = self.fc_critic(phi_features)     
         # batch x action_dim
         return qa
@@ -91,7 +115,7 @@ class RLCategoricalHeadModule(Module):
             - outputs_stream_dict: 
         """
         outputs_stream_dict = {}
-
+        
         phi_features_list = [v[0] if isinstance(v, list) else v for k,v in input_streams_dict.items() if 'input' in k]
         if self.use_cuda:   phi_features_list = [v.cuda() for v in phi_features_list]
         phi_features = torch.cat(phi_features_list, dim=-1)
@@ -112,27 +136,41 @@ class RLCategoricalHeadModule(Module):
         # The following accounts for player dimension if VDN:
         legal_qa = (1+qa-qa.min(dim=-1, keepdim=True)[0]) * legal_actions
         
-        action = None
-        if 'action' in input_streams_dict:
-            action = input_streams_dict['action']
-            if isinstance(action, list):    action = action[0]
-        if action is None:
-            if self.greedy:
-                action  = legal_qa.max(dim=-1, keepdim=True)[1]
-            else:
-                action = torch.multinomial(legal_qa.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
-        # batch #x 1
-        
-        probs = F.softmax( qa, dim=-1 )
+        probs = None
+        if 'probs' in input_streams_dict:
+            # Assumed to be already softmax-ed of the last dimension!
+            probs = input_streams_dict['probs']
+            if isinstance(probs, list): probs = probs[0]
+            probs = probs.to(qa.device)
+            legal_probs = probs * legal_actions
+        else:
+            probs = F.softmax( qa, dim=-1 )
+            legal_probs = F.softmax( legal_qa, dim=-1 )
+
         log_probs = torch.log(probs+EPS)
         entropy = -torch.sum(probs*log_probs, dim=-1)
         # batch #x 1
         
-        legal_probs = F.softmax( legal_qa, dim=-1 )
         legal_log_probs = torch.log(legal_probs+EPS)
         legal_entropy = -torch.sum(legal_probs*legal_log_probs, dim=-1)
         # batch
 
+        action = None
+        if 'action' in input_streams_dict:
+            action = input_streams_dict['action']
+            if isinstance(action, list):    action = action[0]
+        
+        action_logits = legal_qa
+        if self.action_logits_from_probs:   action_logits = legal_probs
+        if action is None:
+            if self.greedy:
+                #action  = legal_qa.max(dim=-1, keepdim=True)[1]
+                action  = action_logits.max(dim=-1, keepdim=True)[1]
+            else:
+                #action = torch.multinomial(legal_qa.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
+                action = torch.multinomial(action_logits.softmax(dim=-1), num_samples=1) #.reshape((batch_size,))
+        # batch #x 1
+        
         outputs_stream_dict = {
             'a': action,
             'ent': entropy,

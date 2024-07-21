@@ -195,7 +195,8 @@ def test_model_forward_with_cache_and_options():
         print('option ppl with log: ', opt_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][pidx])
         ppl_full = s_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][sids].cpu()
         ppl_option = opt_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][pidx].cpu()
-        print(f"Relative differences full logit vs option logt:   {relative_difference(ppl_full, ppl_option):.6f}")
+        masked_ppl_option = ppl_option.masked_select(mask=option_legal_choices.bool()) 
+        print(f"Relative differences full logit vs option logt:   {relative_difference(ppl_full, masked_ppl_option):.6f}")
         #print( opt_output['inputs']['LMModule']['inputs_prediction_likelihoods'][0].sum(dim=-1).exp())
         print('option ppl choice: ', options[pidx][opt_output['inputs']['LMModule']['inputs_chosen_options'][0][pidx].item()])
         print('option ppl with log choice: ', options[pidx][opt_output['inputs']['LMModule']['inputs_lchosen_options'][0][pidx].item()])
@@ -233,7 +234,7 @@ def test_model_forward_hidden_states():
         '4.',
         '5.',
         '6.',
-        #'x+2=7',
+        '7',
         #'x-1=2',
         ],
     ]
@@ -292,7 +293,9 @@ def test_model_forward_hidden_states():
         print('option ppl with log: ', opt_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][pidx])
         ppl_full = s_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][sids].cpu()
         ppl_option = opt_output['inputs']['LMModule']['inputs_lprediction_perplexities'][0][pidx].cpu()
-        print(f"Relative differences full logit vs option logt:   {relative_difference(ppl_full, ppl_option):.6f}")
+        option_legal_choices = opt_output['inputs']['LMModule']['inputs_legal_choices'][0][pidx].cpu()
+        masked_ppl_option = ppl_option.masked_select(mask=option_legal_choices.bool()) 
+        print(f"Relative differences full logit vs option logt:   {relative_difference(ppl_full, masked_ppl_option):.6f}")
         #print( opt_output['inputs']['LMModule']['inputs_prediction_likelihoods'][0].sum(dim=-1).exp())
         print('option ppl choice: ', options[pidx][opt_output['inputs']['LMModule']['inputs_chosen_options'][0][pidx].item()])
         print('option ppl with log choice: ', options[pidx][opt_output['inputs']['LMModule']['inputs_lchosen_options'][0][pidx].item()])
