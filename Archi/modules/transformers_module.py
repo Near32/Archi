@@ -15,6 +15,8 @@ from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig,
+    Cache,
+    DynamicCache,
 )
 from peft import (
     prepare_model_for_kbit_training,
@@ -90,6 +92,8 @@ class ArchiTransformerModule(Module):
         
         self.model_id = model_id
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
         
         self.quantization_config = None
         if self.config['quantize']:
@@ -107,15 +111,20 @@ class ArchiTransformerModule(Module):
             quantization_config=self.quantization_config,
             device_map={"":0} if self.use_cuda else 'auto',
         )
-
-        if self.config['gradient_checkpointing']:
-            self.model.gradient_checkpointing_enable()
+        if not self.use_cuda:   self.model = self.model.cpu()
 
         if self.config['quantize']:
             self.model = prepare_model_for_kbit_training(self.model)
 
-        self.lora_config = LoraConfig(**self.config['lora_config'])
-        self.model = get_peft_model(self.model, self.lora_config)
+        if self.config['use_lora']:
+            self.lora_config = LoraConfig(**self.config['lora_config'])
+            self.model = get_peft_model(self.model, self.lora_config)
+        
+        if self.config['gradient_checkpointing']:
+            self.model.gradient_checkpointing_enable()
+        else:
+            self.model.gradient_checkpointing_disable()
+
         print_trainable_parameters(self.model)
 
     def reset(self):
@@ -151,9 +160,9 @@ class ArchiTransformerModule(Module):
                 import ipdb; ipdb.set_trace()
                 #Is it list of strings?
                 decoded_x = self.tokenizer.decode(x_ids)
-            elif x.dtype==torch.uint8:
+            else: #if x.dtype==torch.uint8:
                 # it is a byteTensor from string:
-                decoded_x = BT2STR(x)
+                decoded_x = BT2STR(x.to(torch.uint8))
                 # Are there options?
                 if '[OPTION]' in decoded_x[0]:
                     split_options = True
@@ -231,6 +240,8 @@ class ArchiTransformerModule(Module):
 
         #Forward prompts and retrieve past_key_values:
         cache = transformers.DynamicCache()
+        #import ipdb;ipdb.set_trace() 
+        #output = self.model(batched_prompts_inputs.input_ids, return_dict=True)
         outputs = self.model(
             **batched_prompts_inputs,
             use_cache=True,
@@ -244,7 +255,10 @@ class ArchiTransformerModule(Module):
         prompts_lhidden_states = outputs.hidden_states[-1]
         # (batch_size x sequence_length x embed_size_per_head)
         cache = outputs.past_key_values
-        past_key_values = cache.to_legacy_cache()
+        if isinstance(cache, Cache):
+            past_key_values = cache.to_legacy_cache()
+        else:
+            past_key_values = cache
         # (batch_size x num_heads x sequence_length x embed_size_per_head)
         '''
         '''
