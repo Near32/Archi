@@ -91,7 +91,10 @@ class ArchiTransformerModule(Module):
         self.generation_kwargs = self.config['generation_kwargs']
         
         self.model_id = model_id
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+        )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
         
@@ -110,6 +113,7 @@ class ArchiTransformerModule(Module):
             pretrained_model_name_or_path=self.model_id,
             quantization_config=self.quantization_config,
             device_map={"":0} if self.use_cuda else 'auto',
+            trust_remote_code=True,
         )
         if not self.use_cuda:   self.model = self.model.cpu()
 
