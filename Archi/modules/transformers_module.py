@@ -504,7 +504,7 @@ class ArchiTransformerModule(Module):
                 'legal_choices': legal_choices,
                 # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
                 'last_token_last_hidden_states': slhidden_states[:,:,-1,...],
-                'last_hidden_states': slhidden_states,
+                #'last_hidden_states': slhidden_states,
                 'tokenized_option_prediction': tokenized_option_predictions,
                 'tokenized_prediction': tokenized_predictions,
                 'lchosen_options': lchosen_options,
@@ -708,21 +708,19 @@ class ArchiTransformerModule(Module):
                 for tk in tokenized_predictions],
                 dim=0,
             )
-            output_dict.update({
-                'legal_choices': legal_choices,
-                # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
-                'last_token_last_hidden_states': slhidden_states[:,:,-1,...],
-                'last_hidden_states': slhidden_states,
-                'tokenized_option_prediction': tokenized_option_predictions,
-                'tokenized_prediction': tokenized_predictions,
-                'chosen_options': lchosen_options,
-                'prediction_logits': spredicted_logits,
-                'prediction_probs': lsoptions_probs,
-                'prediction_perplexities': lsoptions_perplexities, 
-                'prediction_likelihoods': lsoptions_likelihoods,
-            })
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
+            if self.config.get('output_last_hidden_states', False):  output_dict['last_hidden_states'] = slhidden_states
+            #'tokenized_option_prediction': tokenized_option_predictions,
+            if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions
+            output_dict['chosen_options'] = lchosen_options
+            if self.config.get('output_logits', False): output_dict['prediction_logits'] = spredicted_logits
+            output_dict['prediction_probs'] = lsoptions_probs
+            output_dict['prediction_perplexities'] = lsoptions_perplexities 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
 
-        return spredicted_logits
+        return lchosen_options #spredicted_logits
  
     
     def _forward_inference(
