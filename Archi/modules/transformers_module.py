@@ -529,11 +529,16 @@ class ArchiTransformerModule(Module):
         batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
 
         #Forward prompts and retrieve past_key_values:
-        cache = transformers.DynamicCache()
+        if 'RWKV' in self.model_id:
+            cache_kwargs = {}
+        else:
+            cache = transformers.DynamicCache()
+            cache_kwargs = {'past_key_values': cache}
+
         outputs = self.model(
             **batched_prompts_inputs,
             use_cache=True,
-            past_key_values=cache,
+            **cache_kwargs, #past_key_values=cache,
             output_attentions=True,
             output_hidden_states=True,
             return_dict=True,
@@ -541,16 +546,24 @@ class ArchiTransformerModule(Module):
         prompts_predicted_logits = outputs.logits.cpu()
         prompts_lhidden_states = outputs.hidden_states[-1].cpu()
         # (batch_size x sequence_length x embed_size_per_head)
-        cache = outputs.past_key_values
-        if isinstance(cache, Cache):
-            past_key_values = cache.to_legacy_cache()
+        if 'RWKV' in self.model_id:
+            past_key_values = outputs.state
+            # (list of tensors of shape : batch_size x hidden_size x num_hidden_layers)
+            past_key_values = [
+                pkvt.cpu()
+                for pkvt in past_key_values
+            ]
         else:
-            past_key_values = cache
-        # (batch_size x num_heads x sequence_length x embed_size_per_head)
-        past_key_values = [
-            [ pkvt.cpu() for pkvt in pkvts]
-            for pkvts in past_key_values
-        ]
+            cache = outputs.past_key_values
+            if isinstance(cache, Cache):
+                past_key_values = cache.to_legacy_cache()
+            else:
+                past_key_values = cache
+            # (list of list of tensors of shape: batch_size x num_heads x sequence_length x embed_size_per_head)
+            past_key_values = [
+                [ pkvt.cpu() for pkvt in pkvts]
+                for pkvts in past_key_values
+            ]
         '''
         '''
 
@@ -572,14 +585,25 @@ class ArchiTransformerModule(Module):
             #max_option_len = max(max_option_len, option_len)
             max_option_len = max(max_option_len, option_len+prompt_len)
             # Select and Repeat pkv to fit to new input batch_size:
-            pkv = [
-                [
-                    pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size,1, 1, 1).to(self.model.device)
-                    for pkv_t in pkv_tuple
-                ] for pkv_tuple in past_key_values
-            ]
-            
-            pkv = transformers.DynamicCache.from_legacy_cache(pkv)
+            if 'RWKV' in self.model_id:
+                pkv = [
+                    pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size, *[1 for _ in range(len(pkv_t.shape)-1)]).to(self.model.device)
+                    for pkv_t in past_key_values
+                ]
+                cache_kwargs = {'state': pkv} 
+            else:
+                pkv = [
+                    [
+                        pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size,1, 1, 1).to(self.model.device)
+                        for pkv_t in pkv_tuple
+                    ] for pkv_tuple in past_key_values
+                ]
+                pkv = transformers.DynamicCache.from_legacy_cache(pkv)
+                cache_kwargs = {
+                    'past_key_values': pkv,
+                    'cache_position': torch.arange(prompt_len,prompt_len+option_len),
+                }
+
             # Check that attention and other elements are ok?
             tokenized_option_predictions.append(batched_options_inputs.input_ids.cpu())
             tokenized_prediction = torch.cat([
@@ -594,8 +618,8 @@ class ArchiTransformerModule(Module):
                 # right-pads will be masked out in the computation of the likelihood/perplexity below.
                 output_hidden_states=True,
                 use_cache=True,
-                past_key_values=pkv,
-                cache_position=torch.arange(prompt_len,prompt_len+option_len),
+                **cache_kwargs, #past_key_values=pkv,
+                #cache_position=torch.arange(prompt_len,prompt_len+option_len),
                 return_dict=True,
             )
             del pkv
