@@ -1,0 +1,59 @@
+model_id: 'RL_ArchiHFTGITestModel'
+
+hyperparameters:
+    #hidden_dim: &hidden_dim 16384 #4096*action_dim
+    hidden_dim: &hidden_dim 128 
+    action_dim: &action_dim 4
+
+input_stream_ids:
+    "inputs:obs" : "observations:obs"
+    #"inputs:obs" : "observations:x"
+
+modules:
+    'LMModule':
+        type: 'ArchiHFTGIModule' 
+        #model_id: "HuggingFaceTB/SmolLM-135M-Instruct"
+        model_id: "HuggingFaceTB/SmolLM-1.7B-Instruct"
+        #model_id: "togethercomputer/LLaMA-2-7B-32K"
+        #model_id: "google/gemma-2-2b-it"
+        #model_id: "mistralai/Mixtral-8x7B-Instruct-v0.1"
+        config:
+            'generation_kwargs': 
+                'max_new_tokens': 100
+                'do_sample': True
+                'temperature': 0.7 
+                'repetition_penalty': 1.1 
+                'stop_sequences': [] #['\n']
+                'top_p': 0.7 
+                'top_k': 50
+        use_cuda: False 
+        input_stream_ids:
+                inputs: 'inputs:obs'
+        output_stream_ids:
+                output: "inputs:LMModule:output"
+
+    'RLHead':
+        type: RLCategoricalHeadModule
+        state_dim: *hidden_dim
+        action_dim: *action_dim
+        noisy: False
+        dueling: True
+        action_logits_from_probs: True
+        config: None
+        input_stream_ids: 
+            input0: "inputs:LMModule:inputs_last_token_last_hidden_states"
+            action: "inputs:action"
+            probs: 'inputs:LMModule:inputs_prediction_probs'
+            #legal_actions: "inputs:legal_actions"
+            legal_actions: "inputs:LMModule:inputs_legal_choices"
+        use_cuda: False 
+
+output_mappings:
+        "ent" : "modules:RLHead:ent"
+        "qa" : "modules:RLHead:qa"
+        "log_a" : "modules:RLHead:log_a"
+
+pipelines:
+        torso : []
+        head: ['LMModule', 'RLHead']
+
