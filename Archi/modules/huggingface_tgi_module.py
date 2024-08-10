@@ -1,6 +1,7 @@
 from typing import Dict,List,Optional
 
 import os
+import time
 import torch
 import wandb
 from ordered_set import OrderedSet
@@ -24,7 +25,7 @@ from Archi.utils import (
 
 from huggingface_hub import InferenceClient
 from pydantic import BaseModel, conint
-
+import yaml
 
 
 class ArchiHFTGIModule(Module):
@@ -190,20 +191,32 @@ class ArchiHFTGIModule(Module):
             class MultiChoiceAnswer(BaseModel):
                 answer_id: conint(ge=0, le=len(opts)-1)
             dins = {}
-            pans = f"Answer the following multiple choice question:\n{prompt}\n"
-            pans += f"\nThe possible choices are detailed below, preceded by their id:\n"
+            pans = f"Given the context below, answer the following multiple choice question:\n\n{prompt}\n"
+            pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
             for oidx, opt in enumerate(opts):
                 pans += f"{oidx}. {opt}\n"
             pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
+            pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
             dins['prompt'] = pans
             dins['details'] = True
             dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
             dins.update(self.generation_kwargs)
-            response = self.model.text_generation(**dins)
+            response = False
+            if not response:
+                try:
+                    response = self.model.text_generation(**dins)
+                except Exception as e:
+                    response = False
+                    print(f"ArchiHFTGIModule: exception caught: {e}")
+                    time.sleep(5)
+            #print(pans)
+            #import ipdb; ipdb.set_trace()
             try:
-                response = yaml.safe_load(response['generated_text'])
+                response = yaml.safe_load(response.generated_text)
+                #print(response)
                 response = int(response['answer_id'])
             except Exception as e:
+                print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
                 response = 0
             responses.append(response)        
         
