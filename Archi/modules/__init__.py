@@ -16,4 +16,5 @@ from .RL_categorical_head_module import RLCategoricalHeadModule
 from .RL_categorical_actor_critic_head_module import RLCategoricalActorCriticHeadModule
 from .concatenation_operation_module import ConcatenationOperationModule
 from .transformers_module import ArchiTransformerModule
+from .huggingface_tgi_module import ArchiHFTGIModule
 
