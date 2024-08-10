@@ -226,7 +226,13 @@ class ArchiTransformerModule(Module):
                 batched_inputs=batched_inputs,
                 gt_sentences=gt_sentences,
             )
-        
+        if self.config.get('use_nocache', False):
+            return self._forward_options_nocache(
+                output_dict=output_dict,
+                batched_prompts_inputs=batched_prompts_inputs,
+                list_batched_options_inputs=list_batched_options_inputs,
+            )
+
         return self._forward_options_cache(
             output_dict=output_dict,
             batched_prompts_inputs=batched_prompts_inputs,
@@ -500,22 +506,20 @@ class ArchiTransformerModule(Module):
                 for tk in tokenized_predictions],
                 dim=0,
             )
-            output_dict.update({
-                'legal_choices': legal_choices,
-                # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
-                'last_token_last_hidden_states': slhidden_states[:,:,-1,...],
-                #'last_hidden_states': slhidden_states,
-                'tokenized_option_prediction': tokenized_option_predictions,
-                'tokenized_prediction': tokenized_predictions,
-                'lchosen_options': lchosen_options,
-                'chosen_options': chosen_options,
-                'prediction_logits': spredicted_logits,
-                'prediction_likelihoods': soptions_likelihoods,
-                'lprediction_probs': lsoptions_probs,
-                'lprediction_likelihoods': lsoptions_likelihoods,
-                'prediction_perplexities': soptions_perplexities, 
-                'lprediction_perplexities': lsoptions_perplexities, 
-            })
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
+            if self.config.get('output_last_hidden_states', False): output_dict['last_hidden_states'] = slhidden_states
+            #output_dict['tokenized_option_prediction'] = tokenized_option_predictions
+            if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions
+            output_dict['chosen_options'] = lchosen_options
+            #output_dict['chosen_options'] = chosen_options
+            if self.config.get('output_logits', False): output_dict['prediction_logits'] = spredicted_logits
+            output_dict['prediction_probs'] = lsoptions_probs
+            #output_dict['prediction_likelihoods'] = soptions_likelihoods
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+            #output_dict['prediction_perplexities'] = soptions_perplexities
+            output_dict['prediction_perplexities'] = lsoptions_perplexities
 
         return spredicted_logits
 
