@@ -23,6 +23,7 @@ from Archi.utils import (
 )
 
 
+import huggingface_hub
 from huggingface_hub import InferenceClient
 from pydantic import BaseModel, conint
 import yaml
@@ -60,6 +61,9 @@ class ArchiHFTGIModule(Module):
         self.generation_kwargs = self.config['generation_kwargs']
         
         self.model_id = model_id
+        huggingface_hub.login(
+            token=os.getenv("HF_API_TOKEN", "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"),
+        )
         self.model = InferenceClient(
             model=self.model_id,
             token=os.getenv("HF_API_TOKEN", "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"),
@@ -198,7 +202,8 @@ class ArchiHFTGIModule(Module):
             pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
             pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
             dins['prompt'] = pans
-            dins['details'] = True
+            #dins['details'] = True
+            #dins['return_full_text'] = True
             dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
             dins.update(self.generation_kwargs)
             response = False
@@ -207,6 +212,7 @@ class ArchiHFTGIModule(Module):
                     response = self.model.text_generation(**dins)
                 except Exception as e:
                     response = False
+                    import ipdb; ipdb.set_trace()
                     print(f"ArchiHFTGIModule: exception caught: {e}")
                     time.sleep(5)
             #print(pans)
@@ -217,6 +223,7 @@ class ArchiHFTGIModule(Module):
                 response = int(response['answer_id'])
             except Exception as e:
                 print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+                import ipdb; ipdb.set_trace()
                 response = 0
             responses.append(response)        
         
