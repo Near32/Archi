@@ -35,6 +35,7 @@ class ArchiHFTGIModule(Module):
         model_id,
         id='ArchiHFTGIModule_0',
         config={
+            'use_grammar': False,
             'generation_kwargs': {
                 'max_length':128,
                 'do_sample':True,
@@ -116,7 +117,19 @@ class ArchiHFTGIModule(Module):
                     split_options = True
                     prompts = [dx.split('[/PROMPT]')[0] for dx in decoded_x]
                     options = [dx.split('[/PROMPT]')[1].split('[OPTION]') for dx in decoded_x]
-                    '''
+                else:
+                    raise NotImplementedError
+                    orig_padding_side = self.tokenizer.padding_side
+                    self.tokenizer.padding_side = 'right'
+                    batched_inputs = self.tokenizer(
+                        decoded_x,
+                        padding=True,
+                        #truncation=True,
+                        return_tensors='pt',
+                    )   
+                    self.tokenizer.padding_side = orig_padding_side
+
+                if not self.config['use_grammar']:
                     orig_padding_side = self.tokenizer.padding_side
                     self.tokenizer.padding_size = 'left'
                     batched_prompts_inputs = self.tokenizer(
@@ -143,18 +156,6 @@ class ArchiHFTGIModule(Module):
                             t_popts[k] = t_popts[k][:, prompt_len:]
                         list_batched_options_inputs.append(t_popts)
                     self.tokenizer.padding_side = orig_padding_side
-                    '''
-                else:
-                    raise NotImplementedError
-                    orig_padding_side = self.tokenizer.padding_side
-                    self.tokenizer.padding_side = 'right'
-                    batched_inputs = self.tokenizer(
-                        decoded_x,
-                        padding=True,
-                        #truncation=True,
-                        return_tensors='pt',
-                    )   
-                    self.tokenizer.padding_side = orig_padding_side
         elif isinstance(x, np.ndarray):
             # Or expecting inputs to be made of strings, as numpy array:
             assert len(x.shape) == 1 and isinstance(x[0], str)
@@ -174,13 +175,129 @@ class ArchiHFTGIModule(Module):
                 gt_sentences=gt_sentences,
             )
         
+        if self.config['use_grammar']:
+            return self._forward_grammar_options(
+                output_dict=output_dict,
+                prompts=prompts,
+                options=options,
+            )
+
         return self._forward_options(
             output_dict=output_dict,
             prompts=prompts,
             options=options,
+            batched_prompts_inputs=batched_prompts_inputs,
+            list_batched_options_inputs=list_batched_options_inputs,
         )
 
     def _forward_options(
+        self,
+        output_dict,
+        prompts,
+        options,
+        batched_prompts_inputs,
+        list_batched_options_inputs,
+    ):
+        prompts_batch_size = batched_prompts_inputs['input_ids'].shape[0]
+        #batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
+        
+        # Compute the different options for each prompt:
+        max_option_len = 0
+        max_option_batch_size = 0
+        llist_options_likelihoods = []
+        llist_options_perplexities = []
+
+        list_lhidden_states = []
+        tokenized_predictions = []
+        tokenized_option_predictions = []
+        for prompt_idx in range(prompts_batch_size):
+            prompt_len = batched_prompts_inputs['input_ids'].shape[1]
+
+            prompt = self.tokenizer.decode(batched_prompts_inputs['input_ids'][prompt_idx])
+            opts = [self.tokenizer.decode(x) for x in list_batched_options_inputs[prompt_idx].input_ids] 
+
+            batched_options_inputs = list_batched_options_inputs[prompt_idx]#.to(self.model.device)
+            option_batch_size, option_len = batched_options_inputs['input_ids'].shape[0:2]
+            max_option_batch_size = max(max_option_batch_size, option_batch_size)
+            #max_option_len = max(max_option_len, option_len)
+            max_option_len = max(max_option_len, option_len+prompt_len)
+            
+            # Testing without pkv:
+            nc_batched_options_inputs = {}
+            for k in batched_options_inputs.keys():
+                #nc_batched_options_inputs[k] = torch.cat(
+                batched_options_inputs[k] = torch.cat(
+                        [batched_prompts_inputs[k][prompt_idx:prompt_idx+1].repeat(option_batch_size, 1), batched_options_inputs[k]], 
+                    dim=-1,
+                )
+            
+            option_outputs_probs = []
+            option_outputs_perplexities = []
+            for idx in range(option_batch_size):
+                dins = {'details':True, 'return_full_text':True, 'max_new_tokens':1, 'decoder_input_details':True}
+                dins['prompt'] = self.tokenizer.decode(batched_options_inputs['input_ids'][idx])
+                option_output = self.model.text_generation(**dins)
+                logprobs = torch.Tensor([x.logprob for x in option_output.details.prefill if x.logprob is not None])
+                lsentences_likelihoods = logprobs.sum().exp().item()
+                option_outputs_probs.append(lsentences_likelihoods)
+                perplexity = torch.exp(-torch.mean(logprobs)).item()
+                option_outputs_perplexities.append(perplexity)
+            
+            lsentences_likelihoods = torch.tensor(option_outputs_probs)
+            lsentences_perplexities = torch.tensor(option_outputs_perplexities)
+            llist_options_likelihoods.append(lsentences_likelihoods)
+            llist_options_perplexities.append(lsentences_perplexities)
+        
+        # Stack all predicted_logits with log:
+        lsoptions_likelihoods = (-torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
+        lsoptions_perplexities = (torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
+        for pidx in range(prompts_batch_size):
+            opt_lhd = llist_options_likelihoods[pidx]
+            lsoptions_likelihoods[pidx,:opt_lhd.shape[0]] = opt_lhd
+            
+            opt_ppl = llist_options_perplexities[pidx]
+            lsoptions_perplexities[pidx,:opt_ppl.shape[0]] = opt_ppl
+        
+        '''
+        lsoptions_likelihoods = torch.zeros(len(prompts), max_option_batch_size)
+        # (prompt_batch_size x max_option_batch_size)
+        lsoptions_likelihoods[range(len(prompts)), responses] = 1
+        # (prompt_batch_size x max_option_batch_size)
+        '''
+
+        slhidden_states = torch.zeros(len(prompts), max_option_batch_size, self.config.get('hidden_size', 32))
+        # (prompt_batch_size x max_option_batch_size x hidden_size)
+        
+        # Option choosing with log:
+        lsoptions_probs = (lsoptions_perplexities*(-1)).softmax(dim=-1) #options_likelihoods#.softmax(dim=-1)
+        # (prompt_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x 1)
+        else:
+            lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            #lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x 1)
+        
+        # Legal choices:
+        legal_choices = torch.ones_like(lsoptions_probs).long() #(lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_option_batch_size)
+
+        if output_dict is not None:
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states#[:,:,-1,...]
+            output_dict['chosen_options'] = lchosen_options
+            output_dict['prediction_probs'] = lsoptions_probs
+            output_dict['prediction_perplexities'] = lsoptions_perplexities 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+
+        return lchosen_options #spredicted_logits
+
+    def _forward_grammar_options(
         self,
         output_dict,
         prompts,
@@ -202,7 +319,7 @@ class ArchiHFTGIModule(Module):
             pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
             pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
             dins['prompt'] = pans
-            #dins['details'] = True
+            dins['details'] = True
             #dins['return_full_text'] = True
             dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
             dins.update(self.generation_kwargs)
