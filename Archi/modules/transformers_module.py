@@ -469,7 +469,7 @@ class ArchiTransformerModule(Module):
             # (prompt_batch_size x 1)
         
         # Option choosing with log:
-        lsoptions_probs = ((-1)*lsoptions_peplexiies).softmax(dim=-1) #lsoptions_likelihoods.softmax(dim=-1)
+        lsoptions_probs = ((-1)*lsoptions_perplexities).softmax(dim=-1) #lsoptions_likelihoods.softmax(dim=-1)
         #lsoptions_probs = lsoptions_perplexities 
         # (prompt_batch_size x max_option_batch_size
         if False: #TODO debug self.training:
@@ -699,9 +699,7 @@ class ArchiTransformerModule(Module):
             lsoptions_perplexities[pidx,:opt_ppl.shape[0]] = opt_ppl
         
         # Option choosing with log:
-        # TODO make sure this is proper:
-        import ipdb; ipdb.set_trace()
-        lsoptions_probs = ((-1)*lsoptions_peplexiies).softmax(dim=-1) #lsoptions_likelihoods.softmax(dim=-1)
+        lsoptions_probs = ((-1)*lsoptions_perplexities).softmax(dim=-1) #lsoptions_likelihoods.softmax(dim=-1)
         # (prompt_batch_size x max_option_batch_size
         if False: #TODO debug self.training:
             #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))

@@ -236,7 +236,17 @@ class ArchiHFTGIModule(Module):
             for idx in range(option_batch_size):
                 dins = {'details':True, 'return_full_text':True, 'max_new_tokens':1, 'decoder_input_details':True}
                 dins['prompt'] = self.tokenizer.decode(batched_options_inputs['input_ids'][idx])
-                option_output = self.model.text_generation(**dins)
+                waiting_time = 1 #mins
+                response = False
+                while not response:
+                    try:
+                        option_output = self.model.text_generation(**dins)
+                        response = True
+                    except Exception as e:
+                        response = False
+                        print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time}mins, before retrying.")
+                        time.sleep(60*waiting_time)
+                        waiting_time *= 2
                 logprobs = torch.Tensor([x.logprob for x in option_output.details.prefill if x.logprob is not None])
                 lsentences_likelihoods = logprobs.sum().exp().item()
                 option_outputs_probs.append(lsentences_likelihoods)
@@ -269,6 +279,10 @@ class ArchiHFTGIModule(Module):
         # (prompt_batch_size x max_option_batch_size x hidden_size)
         
         # Option choosing with log:
+        # We compute options from perplexities and not from logprobs/likelihoods because the latter
+        # gets squashed to 0 when the context length increases, whereas perplexities account for the
+        # context length via a normalization, thus preventing the values from being indistinguishable
+        # from each other...
         lsoptions_probs = (lsoptions_perplexities*(-1)).softmax(dim=-1) #options_likelihoods#.softmax(dim=-1)
         # (prompt_batch_size x max_option_batch_size
         if False: #TODO debug self.training:
@@ -324,14 +338,15 @@ class ArchiHFTGIModule(Module):
             dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
             dins.update(self.generation_kwargs)
             response = False
+            waiting_time = 1 #mins
             if not response:
                 try:
                     response = self.model.text_generation(**dins)
                 except Exception as e:
                     response = False
-                    import ipdb; ipdb.set_trace()
-                    print(f"ArchiHFTGIModule: exception caught: {e}")
-                    time.sleep(5)
+                    print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                    time.sleep(60*waiting_time)
+                    waiting_time *= 2
             #print(pans)
             #import ipdb; ipdb.set_trace()
             try:
