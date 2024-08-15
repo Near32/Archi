@@ -28,6 +28,11 @@ from huggingface_hub import InferenceClient
 from pydantic import BaseModel, conint
 import yaml
 
+try:
+    import openai
+    import tiktoken
+except Exception as e:
+    print("Please install openai and tiktoken if you want to use OpenAI API.")
 
 class ArchiHFTGIModule(Module):
     def __init__(
@@ -63,6 +68,24 @@ class ArchiHFTGIModule(Module):
         self.generation_kwargs = self.config['generation_kwargs']
         self.prompt_template = self.config.get('prompt_template', '{prompt}') 
         self.model_id = model_id
+
+        self.openai_model = ('openai' in model_id[:7].lower())
+
+        if self.openai_model:
+            self.model_id = self.model_id.split("openai/")[-1]
+            self.init_openai()
+        else:
+            self.init_hf()
+
+    def init_openai(self):
+        self.model = openai.OpenAI(api_key=os.environ.get("OPENAI_API_TOKEN",""))
+        # TODO: use tiktoken if they geet a padding mechanism ...
+        #self.tokenizer = tiktoken.encoding_for_model(self.model_id)
+        self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("gpt2")
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+    def init_hf(self):
         huggingface_hub.login(
             token=os.getenv("HF_API_TOKEN", "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"),
         )
@@ -71,7 +94,7 @@ class ArchiHFTGIModule(Module):
             token=os.getenv("HF_API_TOKEN", "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"),
         ) 
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
+            self.model_id,
             trust_remote_code=True,
         )
         if self.tokenizer.pad_token is None:
@@ -79,6 +102,80 @@ class ArchiHFTGIModule(Module):
 
     def reset(self):
         pass
+    
+    def tokenize_options_openai(self, prompts, options):
+        '''
+        Perfom tokenization for prompts and options separately,
+        with left padding for prompt and right padding for options,
+        so that the options can be processed using caching of the 
+        prompt.
+        '''
+        #TODO: update with tiktoken when they implement a padding mechanism ...
+
+        orig_padding_side = self.tokenizer.padding_side
+        self.tokenizer.padding_size = 'left'
+        batched_prompts_inputs = self.tokenizer(
+            prompts,
+            padding=True,
+            add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
+            return_tensors='pt',
+        )
+        self.tokenizer.padding_side = 'right'
+        list_batched_options_inputs = []
+        for pidx, opts in enumerate(options):
+            prompt = prompts[pidx]
+            prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
+            #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
+            popts = [prompt+opt for opt in opts]
+            t_popts = self.tokenizer(
+                popts,
+                padding=True,
+                add_special_tokens=False, #TODO: figure out whether it is necessary or not
+                return_tensors='pt',
+            )
+            # Remove the prompt elements:
+            for k in t_popts:
+                t_popts[k] = t_popts[k][:, prompt_len:]
+            list_batched_options_inputs.append(t_popts)
+        self.tokenizer.padding_side = orig_padding_side
+
+        return batched_prompts_inputs, list_batched_options_inputs
+
+    def tokenize_options_hf(self, prompts, options):
+        '''
+        Perfom tokenization for prompts and options separately,
+        with left padding for prompt and right padding for options,
+        so that the options can be processed using caching of the 
+        prompt.
+        '''
+        orig_padding_side = self.tokenizer.padding_side
+        self.tokenizer.padding_size = 'left'
+        batched_prompts_inputs = self.tokenizer(
+            prompts,
+            padding=True,
+            add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
+            return_tensors='pt',
+        )
+        self.tokenizer.padding_side = 'right'
+        list_batched_options_inputs = []
+        for pidx, opts in enumerate(options):
+            prompt = prompts[pidx]
+            prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
+            #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
+            popts = [prompt+opt for opt in opts]
+            t_popts = self.tokenizer(
+                popts,
+                padding=True,
+                add_special_tokens=False, #TODO: figure out whether it is necessary or not
+                return_tensors='pt',
+            )
+            # Remove the prompt elements:
+            for k in t_popts:
+                t_popts[k] = t_popts[k][:, prompt_len:]
+            list_batched_options_inputs.append(t_popts)
+        self.tokenizer.padding_side = orig_padding_side
+
+        return batched_prompts_inputs, list_batched_options_inputs
 
     def forward(self, x, gt_sentences=None, output_dict=None):
         '''
@@ -134,32 +231,19 @@ class ArchiHFTGIModule(Module):
                     # Adding prompt template to prompt:
                     prompts = [self.prompt_template.format(prompt=prompt) for prompt in prompts]
 
-                    orig_padding_side = self.tokenizer.padding_side
-                    self.tokenizer.padding_size = 'left'
-                    batched_prompts_inputs = self.tokenizer(
-                        prompts,
-                        padding=True,
-                        add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
-                        return_tensors='pt',
-                    )
-                    self.tokenizer.padding_side = 'right'
-                    list_batched_options_inputs = []
-                    for pidx, opts in enumerate(options):
-                        prompt = prompts[pidx]
-                        prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
-                        #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
-                        popts = [prompt+opt for opt in opts]
-                        t_popts = self.tokenizer(
-                            popts,
-                            padding=True,
-                            add_special_tokens=False, #TODO: figure out whether it is necessary or not
-                            return_tensors='pt',
+                    if self.openai_model:
+                        batched_prompts_inputs, \
+                        list_batched_options_inputs =   self.tokenize_options_openai(
+                            prompts=prompts,
+                            options=options,
                         )
-                        # Remove the prompt elements:
-                        for k in t_popts:
-                            t_popts[k] = t_popts[k][:, prompt_len:]
-                        list_batched_options_inputs.append(t_popts)
-                    self.tokenizer.padding_side = orig_padding_side
+                    else:
+                        batched_prompts_inputs, \
+                        list_batched_options_inputs =   self.tokenize_options_hf(
+                            prompts=prompts,
+                            options=options,
+                        )
+                    
         elif isinstance(x, np.ndarray):
             # Or expecting inputs to be made of strings, as numpy array:
             assert len(x.shape) == 1 and isinstance(x[0], str)
@@ -193,6 +277,49 @@ class ArchiHFTGIModule(Module):
             batched_prompts_inputs=batched_prompts_inputs,
             list_batched_options_inputs=list_batched_options_inputs,
         )
+
+    def forward_openai(
+        self,
+        batched_options_inputs,
+        idx,
+    ):
+        dins = {'model':self.model_id, 'echo':True, 'max_tokens':0, 'logprobs':1}
+        dins['prompt'] = self.tokenizer.decode(batched_options_inputs['input_ids'][idx])
+        waiting_time = 1 #mins
+        response = False
+        while not response:
+            try:
+                option_output = self.model.chat.completions.create(**dins)
+                response = True
+            except Exception as e:
+                response = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time}mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        import ipdb; ipdb.set_trace()
+        logprobs = option_output['choices'][0]['logprobs']['token_logprobs']
+        return logprobs
+
+    def forward_hf(
+        self,
+        batched_options_inputs,
+        idx,
+    ):
+        dins = {'details':True, 'return_full_text':True, 'max_new_tokens':1, 'decoder_input_details':True}
+        dins['prompt'] = self.tokenizer.decode(batched_options_inputs['input_ids'][idx])
+        waiting_time = 1 #mins
+        response = False
+        while not response:
+            try:
+                option_output = self.model.text_generation(**dins)
+                response = True
+            except Exception as e:
+                response = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time}mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        logprobs = torch.Tensor([x.logprob for x in option_output.details.prefill if x.logprob is not None])
+        return logprobs
 
     def _forward_options(
         self,
@@ -238,20 +365,10 @@ class ArchiHFTGIModule(Module):
             option_outputs_probs = []
             option_outputs_perplexities = []
             for idx in range(option_batch_size):
-                dins = {'details':True, 'return_full_text':True, 'max_new_tokens':1, 'decoder_input_details':True}
-                dins['prompt'] = self.tokenizer.decode(batched_options_inputs['input_ids'][idx])
-                waiting_time = 1 #mins
-                response = False
-                while not response:
-                    try:
-                        option_output = self.model.text_generation(**dins)
-                        response = True
-                    except Exception as e:
-                        response = False
-                        print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time}mins, before retrying.")
-                        time.sleep(60*waiting_time)
-                        waiting_time *= 2
-                logprobs = torch.Tensor([x.logprob for x in option_output.details.prefill if x.logprob is not None])
+                if self.openai_model:
+                    logprobs = self.forward_openai(batched_options_inputs, idx=idx)
+                else:
+                    logprobs = self.forward_hf(batched_options_inputs, idx=idx)
                 lsentences_likelihoods = logprobs.sum().exp().item()
                 option_outputs_probs.append(lsentences_likelihoods)
                 perplexity = torch.exp(-torch.mean(logprobs)).item()
@@ -353,8 +470,8 @@ class ArchiHFTGIModule(Module):
                 except Exception as e:
                     response = False
                     print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
-                    time.sleep(60*waiting_time)
-                    waiting_time *= 2
+                    time.sleep(60*int(waiting_time))
+                    waiting_time *= 1.5
             #print(pans)
             try:
                 response = yaml.safe_load(response.generated_text)
