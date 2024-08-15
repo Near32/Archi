@@ -36,6 +36,7 @@ class ArchiHFTGIModule(Module):
         id='ArchiHFTGIModule_0',
         config={
             'use_grammar': False,
+            'prompt_template':'{prompt}',
             'generation_kwargs': {
                 'max_length':128,
                 'do_sample':True,
@@ -60,7 +61,7 @@ class ArchiHFTGIModule(Module):
         
         self.use_cuda = use_cuda
         self.generation_kwargs = self.config['generation_kwargs']
-        
+        self.prompt_template = self.config.get('prompt_template', '{prompt}') 
         self.model_id = model_id
         huggingface_hub.login(
             token=os.getenv("HF_API_TOKEN", "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"),
@@ -130,6 +131,9 @@ class ArchiHFTGIModule(Module):
                     self.tokenizer.padding_side = orig_padding_side
 
                 if not self.config['use_grammar']:
+                    # Adding prompt template to prompt:
+                    prompts = [self.prompt_template.format(prompt=prompt) for prompt in prompts]
+
                     orig_padding_side = self.tokenizer.padding_side
                     self.tokenizer.padding_size = 'left'
                     batched_prompts_inputs = self.tokenizer(
@@ -331,7 +335,11 @@ class ArchiHFTGIModule(Module):
             for oidx, opt in enumerate(opts):
                 pans += f"{oidx}. {opt}\n"
             pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
-            pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
+            # Previously, before prompting: 
+            #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
+            # Now, with prompting:
+            pans += "What is the digit id of the correct answer?\n" # As an expert, the digit id of the correct answer is "
+            pans = self.prompt_template.format(prompt=pans)
             dins['prompt'] = pans
             dins['details'] = True
             #dins['return_full_text'] = True
@@ -348,7 +356,6 @@ class ArchiHFTGIModule(Module):
                     time.sleep(60*waiting_time)
                     waiting_time *= 2
             #print(pans)
-            #import ipdb; ipdb.set_trace()
             try:
                 response = yaml.safe_load(response.generated_text)
                 #print(response)
