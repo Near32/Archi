@@ -462,13 +462,14 @@ class ArchiHFTGIModule(Module):
             #dins['return_full_text'] = True
             dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
             dins.update(self.generation_kwargs)
-            response = False
+            responded = False
             waiting_time = 1 #mins
-            if not response:
+            while not responded:
                 try:
                     response = self.model.text_generation(**dins)
+                    responded = True
                 except Exception as e:
-                    response = False
+                    responded = False
                     print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
                     time.sleep(60*int(waiting_time))
                     waiting_time *= 1.5
