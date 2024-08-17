@@ -81,6 +81,7 @@ class ArchiHFTGIModule(Module):
         self.model = openai.OpenAI(api_key=os.environ.get("OPENAI_API_TOKEN",""))
         # TODO: use tiktoken if they geet a padding mechanism ...
         #self.tokenizer = tiktoken.encoding_for_model(self.model_id)
+        assert 'gpt' in self.model_id 
         self.tokenizer = transformers.GPT2Tokenizer.from_pretrained("gpt2")
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -432,6 +433,91 @@ class ArchiHFTGIModule(Module):
 
         return lchosen_options #spredicted_logits
 
+    def forward_grammar_openai(self, prompt, opts):
+        class MultiChoiceAnswer(BaseModel):
+            answer_id: int # OpenAI does not allow conint : conint(ge=0, le=len(opts)-1)
+        dins = {'model':self.model_id}
+        pans = f"Given the context below, answer the following multiple choice question:\n\n{prompt}\n"
+        pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
+        for oidx, opt in enumerate(opts):
+            pans += f"{oidx}. {opt}\n"
+        pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
+        # Previously, before prompting: 
+        #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
+        # Now, with prompting:
+        pans += "What is the digit id of the correct answer?\n" # As an expert, the digit id of the correct answer is "
+        pans = self.prompt_template.format(prompt=pans)
+        dins['messages'] = [
+          {'role': 'system', 'content': 'You are a helpful assistant.'},            
+          {'role': 'user', 'content': pans},
+        ]
+        dins['response_format']=MultiChoiceAnswer
+        # TODO: update dictionnary to fit to API :dins.update(self.generation_kwargs)
+        responded = False
+        waiting_time = 1 #mins
+        while not responded:
+            try:
+                response = self.model.beta.chat.completions.parse(**dins)
+                responded = True
+            except Exception as e:
+                responded = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        try:
+            # Previously:
+            #response = yaml.safe_load(response.choices[0].message.parsed)
+            # No longer needed, the API returns the object directly. 
+            response = response.choices[0].message.parsed
+            #print(response)
+            response = int(response.answer_id)
+        except Exception as e:
+            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+            import ipdb; ipdb.set_trace()
+            response = 0
+        return response 
+    
+    def forward_grammar_hf(self, prompt, opts):
+        class MultiChoiceAnswer(BaseModel):
+            answer_id: conint(ge=0, le=len(opts)-1)
+        dins = {}
+        pans = f"Given the context below, answer the following multiple choice question:\n\n{prompt}\n"
+        pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
+        for oidx, opt in enumerate(opts):
+            pans += f"{oidx}. {opt}\n"
+        pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
+        # Previously, before prompting: 
+        #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
+        # Now, with prompting:
+        pans += "What is the digit id of the correct answer?\n" # As an expert, the digit id of the correct answer is "
+        pans = self.prompt_template.format(prompt=pans)
+        dins['prompt'] = pans
+        dins['details'] = True
+        #dins['return_full_text'] = True
+        dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
+        dins.update(self.generation_kwargs)
+        responded = False
+        waiting_time = 1 #mins
+        while not responded:
+            try:
+                response = self.model.text_generation(**dins)
+                responded = True
+            except Exception as e:
+                responded = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        #print(pans)
+        try:
+            response = yaml.safe_load(response.generated_text)
+            #print(response)
+            response = int(response['answer_id'])
+        except Exception as e:
+            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+            import ipdb; ipdb.set_trace()
+            response = 0
+        return response 
+    
     def _forward_grammar_options(
         self,
         output_dict,
@@ -442,46 +528,12 @@ class ArchiHFTGIModule(Module):
         responses = []
         max_option_batch_size = 0
         for pidx, opts in enumerate(options):
-            max_option_batch_size = max(max_option_batch_size, len(opts))
             prompt = prompts[pidx]
-            class MultiChoiceAnswer(BaseModel):
-                answer_id: conint(ge=0, le=len(opts)-1)
-            dins = {}
-            pans = f"Given the context below, answer the following multiple choice question:\n\n{prompt}\n"
-            pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
-            for oidx, opt in enumerate(opts):
-                pans += f"{oidx}. {opt}\n"
-            pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
-            # Previously, before prompting: 
-            #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
-            # Now, with prompting:
-            pans += "What is the digit id of the correct answer?\n" # As an expert, the digit id of the correct answer is "
-            pans = self.prompt_template.format(prompt=pans)
-            dins['prompt'] = pans
-            dins['details'] = True
-            #dins['return_full_text'] = True
-            dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
-            dins.update(self.generation_kwargs)
-            responded = False
-            waiting_time = 1 #mins
-            while not responded:
-                try:
-                    response = self.model.text_generation(**dins)
-                    responded = True
-                except Exception as e:
-                    responded = False
-                    print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
-                    time.sleep(60*int(waiting_time))
-                    waiting_time *= 1.5
-            #print(pans)
-            try:
-                response = yaml.safe_load(response.generated_text)
-                #print(response)
-                response = int(response['answer_id'])
-            except Exception as e:
-                print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
-                import ipdb; ipdb.set_trace()
-                response = 0
+            max_option_batch_size = max(max_option_batch_size, len(opts))
+            if self.openai_model:
+                response = self.forward_grammar_openai(prompt, opts)
+            else:
+                response = self.forward_grammar_hf(prompt, opts)
             responses.append(response)        
         
         lsoptions_likelihoods = torch.zeros(len(prompts), max_option_batch_size)
