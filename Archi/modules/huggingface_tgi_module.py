@@ -458,7 +458,7 @@ class ArchiHFTGIModule(Module):
         pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
         for oidx, opt in enumerate(opts):
             pans += f"{oidx}. {opt}\n"
-        pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
+        pans += f"Please use the following schema: {MultiChoiceAnswer.model_json_schema()}\n\n"
         # Previously, before prompting: 
         #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
         # Now, with prompting:
@@ -506,7 +506,7 @@ class ArchiHFTGIModule(Module):
             answer_ids: List[int] # OpenAI does not allow conint : conint(ge=0, le=len(opts)-1)
         dins = {'model':self.model_id}
         pans = f"{prompt}\n\n"
-        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.schema()}\n"
+        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.model_json_schema()}\n"
         pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions into your output.\n"
         pans += f"The list of answer_ids must contain {max_questions_batch_size} elements.\n"
         pans = self.prompt_template.format(prompt=pans)
@@ -527,8 +527,6 @@ class ArchiHFTGIModule(Module):
                 print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
                 time.sleep(60*int(waiting_time))
                 waiting_time *= 1.5
-        print(pans)
-        import ipdb; ipdb.set_trace()
         try:
             # Previously:
             #response = yaml.safe_load(response.choices[0].message.parsed)
@@ -549,7 +547,7 @@ class ArchiHFTGIModule(Module):
         pans += f"\nThe possible choices are detailed below, preceded by their id (from 0 to {len(opts)-1}) :\n"
         for oidx, opt in enumerate(opts):
             pans += f"{oidx}. {opt}\n"
-        pans += f"Please use the following schema: {MultiChoiceAnswer.schema()}\n\n"
+        pans += f"Please use the following schema: {MultiChoiceAnswer.model_json_schema()}\n\n"
         # Previously, before prompting: 
         #pans += "What is the digit id of the correct answer?\n\n As an expert, the digit id of the correct answer is "
         # Now, with prompting:
@@ -558,7 +556,7 @@ class ArchiHFTGIModule(Module):
         dins['prompt'] = pans
         dins['details'] = True
         #dins['return_full_text'] = True
-        dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.schema()}
+        dins['grammar'] = {"type": "json", "value": MultiChoiceAnswer.model_json_schema()}
         dins.update(self.generation_kwargs)
         responded = False
         waiting_time = 1 #mins
@@ -594,14 +592,14 @@ class ArchiHFTGIModule(Module):
             answer_ids: List[conint(ge=0, le=max_options_batch_size-1)]
         dins = {}
         pans = f"{prompt}\n\n"
-        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.schema()}\n\n"
+        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.model_json_schema()}\n\n"
         pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions in to your output!\n\n"
         pans = self.prompt_template.format(prompt=pans)
         dins['prompt'] = pans
         dins['details'] = True
         #dins['return_full_text'] = True
         import ipdb; ipdb.set_trace()
-        #TODO: dins['grammar'] = {"type": "json", "value": MultiQuestionMultiChoiceAnswer.schema()}
+        #TODO: dins['grammar'] = {"type": "json", "value": MultiQuestionMultiChoiceAnswer.model_json_schema()}
         dins.update(self.generation_kwargs)
         responded = False
         waiting_time = 1 #mins
