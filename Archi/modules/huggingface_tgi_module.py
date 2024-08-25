@@ -184,6 +184,7 @@ class ArchiHFTGIModule(Module):
         then teacher forcing is implemented...
         '''
         split_options = False
+        split_questions = False
 
         if gt_sentences is not None:
             gt_sentences = gt_sentences.long().to(x.device)
@@ -212,7 +213,12 @@ class ArchiHFTGIModule(Module):
                 # it is a byteTensor from string:
                 decoded_x = BT2STR(x.to(torch.uint8))
                 # Are there options?
-                if '[OPTION]' in decoded_x[0]:
+                if '[NBR_QUESTIONS]' in decoded_x[0]:
+                    split_questions = True
+                    prompts = [dx.split('[NBR_QUESTIONS]')[0] for dx in decoded_x]
+                    nbr_questions = [int(dx.split('[NBR_QUESTIONS]')[1].split('[/NBR_QUESTIONS]')[0]) for dx in decoded_x]
+                    max_nbr_options = [int(dx.split('[MAX_NBR_OPTIONS]')[1].split('[/MAX_NBR_OPTIONS]')[0]) for dx in decoded_x]
+                elif '[OPTION]' in decoded_x[0]:
                     split_options = True
                     prompts = [dx.split('[/PROMPT]')[0] for dx in decoded_x]
                     options = [dx.split('[/PROMPT]')[1].split('[OPTION]') for dx in decoded_x]
@@ -257,7 +263,7 @@ class ArchiHFTGIModule(Module):
         else:
             raise NotImplementedError
         
-        if not split_options:
+        if not split_options and not split_questions:
             return self._forward_inference(
                 output_dict=output_dict,
                 batched_inputs=batched_inputs,
@@ -265,11 +271,22 @@ class ArchiHFTGIModule(Module):
             )
         
         if self.config['use_grammar']:
-            return self._forward_grammar_options(
-                output_dict=output_dict,
-                prompts=prompts,
-                options=options,
-            )
+            if split_options:
+                return self._forward_grammar_options(
+                    output_dict=output_dict,
+                    prompts=prompts,
+                    options=options,
+                )
+
+            elif split_questions:
+                return self._forward_grammar_questions(
+                    output_dict=output_dict,
+                    prompts=prompts,
+                    nbr_questions=nbr_questions,
+                    max_nbr_options=max_nbr_options,
+                )
+            else:
+                raise NotImplementedError
 
         return self._forward_options(
             output_dict=output_dict,
@@ -477,6 +494,53 @@ class ArchiHFTGIModule(Module):
             response = 0
         return response 
     
+    def forward_grammar_questions_openai(self, prompt, max_options_batch_size, max_questions_batch_size):
+        '''
+        :param prompt: str formatted with up to :param max_questions_batch_size: closed-form questions, 
+          which should be answered with up to :param max_options_batch_size: possible answers.
+        :param max_options_batch_size: int
+        :param max_questions_batch_size: int
+        :return responses: torch.Tensor of shape (max_questions_batch_size, max_options_batch_size)
+        '''
+        class MultiQuestionMultiChoiceAnswer(BaseModel):
+            answer_ids: List[int] # OpenAI does not allow conint : conint(ge=0, le=len(opts)-1)
+        dins = {'model':self.model_id}
+        pans = f"{prompt}\n\n"
+        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.schema()}\n"
+        pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions into your output.\n"
+        pans += f"The list of answer_ids must contain {max_questions_batch_size} elements.\n"
+        pans = self.prompt_template.format(prompt=pans)
+        dins['messages'] = [
+          {'role': 'system', 'content': 'You are a helpful assistant.'},            
+          {'role': 'user', 'content': pans},
+        ]
+        dins['response_format']=MultiQuestionMultiChoiceAnswer
+        # TODO: update dictionnary to fit to API :dins.update(self.generation_kwargs)
+        responded = False
+        waiting_time = 1 #mins
+        while not responded:
+            try:
+                response = self.model.beta.chat.completions.parse(**dins)
+                responded = True
+            except Exception as e:
+                responded = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        print(pans)
+        import ipdb; ipdb.set_trace()
+        try:
+            # Previously:
+            #response = yaml.safe_load(response.choices[0].message.parsed)
+            # No longer needed, the API returns the object directly. 
+            responses_model = response.choices[0].message.parsed
+            responses = torch.tensor(responses_model.answer_ids, dtype=torch.long).reshape(max_questions_batch_size, 1)
+        except Exception as e:
+            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+            import ipdb; ipdb.set_trace()
+            responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
+        return responses
+    
     def forward_grammar_hf(self, prompt, opts):
         class MultiChoiceAnswer(BaseModel):
             answer_id: conint(ge=0, le=len(opts)-1)
@@ -518,13 +582,66 @@ class ArchiHFTGIModule(Module):
             response = 0
         return response 
     
+    def forward_grammar_questions_hf(self, prompt:str, max_options_batch_size:int, max_questions_batch_size:int):
+        '''
+        :param prompt: str formatted with up to :param max_questions_batch_size: closed-form questions, 
+          which should be answered with up to :param max_options_batch_size: possible answers.
+        :param max_options_batch_size: int
+        :param max_questions_batch_size: int
+        :return responses: torch.Tensor of shape (max_questions_batch_size, max_options_batch_size)
+        '''
+        class MultiQuestionMultiChoiceAnswer(BaseModel):
+            answer_ids: List[conint(ge=0, le=max_options_batch_size-1)]
+        dins = {}
+        pans = f"{prompt}\n\n"
+        pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.schema()}\n\n"
+        pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions in to your output!\n\n"
+        pans = self.prompt_template.format(prompt=pans)
+        dins['prompt'] = pans
+        dins['details'] = True
+        #dins['return_full_text'] = True
+        import ipdb; ipdb.set_trace()
+        #TODO: dins['grammar'] = {"type": "json", "value": MultiQuestionMultiChoiceAnswer.schema()}
+        dins.update(self.generation_kwargs)
+        responded = False
+        waiting_time = 1 #mins
+        while not responded:
+            try:
+                response = self.model.text_generation(**dins)
+                responded = True
+            except Exception as e:
+                responded = False
+                print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                time.sleep(60*int(waiting_time))
+                waiting_time *= 1.5
+        print(pans)
+        import ipdb; ipdb.set_trace()
+        try:
+            responses_model = yaml.safe_load(response.generated_text)
+            responses = torch.tensor(responses_model['answer_ids'], dtype=torch.long).reshape(max_questions_batch_size, 1)
+        except Exception as e:
+            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+            import ipdb; ipdb.set_trace()
+            responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
+        return responses 
+    
     def _forward_grammar_options(
         self,
         output_dict,
         prompts,
         options,
     ):
-        
+        '''
+        This function is a wrapper for _forward_grammar_hf or _forward_grammar_openai.
+        It will call the appropriate function based on the value of self.openai_model,
+        which is set in the constructor, based on whether model_id contains 'openai'.
+        It will use Structured Outputs/Grammar/JSON to extract the answer among the 
+        options and update the output_dict accordingly.
+        :param output_dict: Dict to update with results.
+        :param prompts: list of strings
+        :param options: list of list of strings
+        :return lchosen_options: (prompt_batch_size x 1)
+        ''' 
         responses = []
         max_option_batch_size = 0
         for pidx, opts in enumerate(options):
@@ -563,6 +680,85 @@ class ArchiHFTGIModule(Module):
         # Legal choices:
         legal_choices = (lsoptions_probs != 0).long()
         # (prompt_batch_size x max_option_batch_size)
+
+        if output_dict is not None:
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states#[:,:,-1,...]
+            output_dict['chosen_options'] = lchosen_options
+            output_dict['prediction_probs'] = lsoptions_probs
+            output_dict['prediction_perplexities'] = lsoptions_perplexities 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+
+        return lchosen_options #spredicted_logits
+ 
+    
+    def _forward_grammar_questions(
+        self,
+        output_dict,
+        prompts:List[str],
+        nbr_questions:List[int],
+        max_nbr_options:List[int],
+    ):
+        '''
+        This function is a wrapper for _forward_grammar_questions_hf or _forward_grammar_questions_openai.
+        It will call the appropriate function based on the value of self.openai_model,
+        which is set in the constructor, based on whether model_id contains 'openai'.
+        It will use Structured Outputs/Grammar/JSON to extract answers among to 
+        the :param nbr_questions: questions found in the prompts, among 
+        the :param max_nbr_options: options, and update the output_dict accordingly.
+
+        :param output_dict: Dict to update with results.
+        :param prompts: list of strings
+        :param nbr_questions: list of integers
+        :param max_nbr_options: list of integers
+        :return lchosen_options: (prompt_batch_size x nbr_questions x 1)
+        ''' 
+         
+        responses = []
+        max_option_batch_size = max(max_nbr_options)
+        max_question_batch_size = max(nbr_questions)
+        for pidx, prompt in enumerate(prompts):
+            if self.openai_model:
+                response = self.forward_grammar_questions_openai(prompt, max_option_batch_size, max_question_batch_size)
+            else:
+                response = self.forward_grammar_questions_hf(prompt, max_option_batch_size, max_question_batch_size)
+            # (max_question_batch_size x max_option_batch_size) 
+            responses.append(response)        
+        response = torch.stack(responses, dim=0)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+ 
+        lsoptions_likelihoods = torch.zeros(len(prompts), max_question_batch_size, max_option_batch_size)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+        lsoptions_likelihoods = lsoptions_likelihoods.scatter_(
+            dim=-1, 
+            index=response, 
+            src=torch.ones_like(response, dtype=lsoptions_likelihoods.dtype),
+        )
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+
+        slhidden_states = torch.zeros(len(prompts), max_question_batch_size, max_option_batch_size, self.config.get('hidden_size', 32))
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size x hidden_size)
+        lsoptions_perplexities = lsoptions_likelihoods*(-1)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+        
+        # Option choosing with log:
+        lsoptions_probs = lsoptions_likelihoods#.softmax(dim=-1)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x max_question_batch_size x 1)
+        else:
+            lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            #lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x max_question_batch_size x 1)
+        
+        # Legal choices:
+        legal_choices = (lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
 
         if output_dict is not None:
             output_dict['legal_choices'] = legal_choices
