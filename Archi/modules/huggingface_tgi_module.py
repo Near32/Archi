@@ -594,12 +594,12 @@ class ArchiHFTGIModule(Module):
         pans = f"{prompt}\n\n"
         pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.model_json_schema()}\n\n"
         pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions in to your output!\n\n"
+        pans += f"The list of answer_ids must contain {max_questions_batch_size} elements.\n"
         pans = self.prompt_template.format(prompt=pans)
         dins['prompt'] = pans
         dins['details'] = True
         #dins['return_full_text'] = True
-        import ipdb; ipdb.set_trace()
-        #TODO: dins['grammar'] = {"type": "json", "value": MultiQuestionMultiChoiceAnswer.model_json_schema()}
+        dins['grammar'] = {"type": "json", "value": MultiQuestionMultiChoiceAnswer.model_json_schema()}
         dins.update(self.generation_kwargs)
         responded = False
         waiting_time = 1 #mins
@@ -612,14 +612,12 @@ class ArchiHFTGIModule(Module):
                 print(f"ArchiHFTGIModule: exception caught: {e}\n\nWaiting {waiting_time} mins, before retrying.")
                 time.sleep(60*int(waiting_time))
                 waiting_time *= 1.5
-        print(pans)
-        import ipdb; ipdb.set_trace()
         try:
             responses_model = yaml.safe_load(response.generated_text)
             responses = torch.tensor(responses_model['answer_ids'], dtype=torch.long).reshape(max_questions_batch_size, 1)
         except Exception as e:
             print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
-            import ipdb; ipdb.set_trace()
+            # TODO: figure out a reply mechanisms ? import ipdb; ipdb.set_trace()
             responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
         return responses 
     
