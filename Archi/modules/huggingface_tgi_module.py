@@ -68,6 +68,7 @@ class ArchiHFTGIModule(Module):
         self.generation_kwargs = self.config['generation_kwargs']
         self.prompt_template = self.config.get('prompt_template', '{prompt}') 
         self.model_id = model_id
+        self.error_count = 0
 
         self.openai_model = ('openai' in model_id[:7].lower())
 
@@ -533,9 +534,11 @@ class ArchiHFTGIModule(Module):
             # No longer needed, the API returns the object directly. 
             responses_model = response.choices[0].message.parsed
             responses = torch.tensor(responses_model.answer_ids, dtype=torch.long).reshape(max_questions_batch_size, 1)
+            responses = torch.clamp(responses, min=0, max=max_options_batch_size-1)
         except Exception as e:
-            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
-            import ipdb; ipdb.set_trace()
+            self.error_count += 1
+            print(f"ArchiHFTGIModule: error {self.error_count} : yaml safe load exception caught: {e}")
+            # TODO: figure out a reply mechanisms ? import ipdb; ipdb.set_trace()
             responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
         return responses
     
@@ -615,8 +618,10 @@ class ArchiHFTGIModule(Module):
         try:
             responses_model = yaml.safe_load(response.generated_text)
             responses = torch.tensor(responses_model['answer_ids'], dtype=torch.long).reshape(max_questions_batch_size, 1)
+            responses = torch.clamp(responses, min=0, max=max_options_batch_size-1)
         except Exception as e:
-            print(f"ArchiHFTGIModule: yaml safe load exception caught: {e}")
+            self.error_count += 1
+            print(f"ArchiHFTGIModule: error {self.error_count} : yaml safe load exception caught: {e}")
             # TODO: figure out a reply mechanisms ? import ipdb; ipdb.set_trace()
             responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
         return responses 
