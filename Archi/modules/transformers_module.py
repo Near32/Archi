@@ -1,5 +1,7 @@
 from typing import Dict,List,Optional
 
+import os
+import re
 import torch
 import numpy as np
 import wandb
@@ -103,6 +105,7 @@ class ArchiTransformerModule(Module):
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             trust_remote_code=True,
+            token=os.getenv('HF_TOKEN'),
         )
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -121,8 +124,11 @@ class ArchiTransformerModule(Module):
         self.model = AutoModelForCausalLM.from_pretrained(
             pretrained_model_name_or_path=self.model_id,
             quantization_config=self.quantization_config,
-            device_map={"":0} if self.use_cuda else 'auto',
+            #device_map={"":0} if self.use_cuda else 'auto',
+            # MULTI-GPU automatic loading of the different shards:
+            device_map='auto',
             trust_remote_code=True,
+            token=os.getenv('HF_TOKEN'),
         )
         if not self.use_cuda:   self.model = self.model.cpu()
 
@@ -308,16 +314,19 @@ class ArchiTransformerModule(Module):
         attempt_count = 0
         list_errors = []
         import ipdb; ipdb.set_trace()
+        #TODO: update to deal with badformatting that the LM may return...
         while not responded and attempt_count < 5:  # Limit the number of retries to avoid infinite loop
             try:
                 # Generate the formatted prompt
                 pans = f"{prompt}\n"
                 pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.model_json_schema()}\n"
-                pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions in your output!\n"
-                pans += f"The list of answer_ids must contain {max_questions_batch_size} elements.\n"
+                pans += f"Make sure to concatenate the answers to all (explicit and implicit) questions in your output, in the right order!\n"
+                pans += f"The list of answer_ids must contain {max_questions_batch_size} elements, "
+                pans += f"each corresponding to the different questions in order.\n"
+                pans += f"There must be one single final answer_ids.\n"
                 example_answer_ids = [np.random.randint(max_options_batch_size) for _ in range(max_questions_batch_size)]
                 example_answer = MultiQuestionMultiChoiceAnswer(answer_ids=example_answer_ids).model_dump()
-                pans += f"For example, your final answer should look like:\n```json\n{example_answer}\n```\n\n" 
+                pans += f"For example, it  should look like the following:\n```json\n{example_answer}\n```\n\n" 
                 # Append potential error feedback if this is not the first attempt
                 if attempt_count > 0:
                     pans += f"\nBe careful to not trigger the following possible error: "
@@ -330,7 +339,7 @@ class ArchiTransformerModule(Module):
                     tokenize=False,
                     add_generation_prompt=True,
                 )
-                tokenized_input_text = self.tokenizer.encode(input_text, return_tensors="pt")
+                tokenized_input_text = self.tokenizer.encode(input_text, return_tensors="pt").to(self.model.device)
                 response = self.model.generate(
                     tokenized_input_text, 
                     **self.generation_kwargs,
@@ -340,7 +349,10 @@ class ArchiTransformerModule(Module):
                 # Extract the generated text from the response
                 #generated_text = response[0]['generated_text']
                 generated_text = self.tokenizer.decode(response[0], skip_special_tokens=False)
-                generated_text = generated_text.split('im_start|>assistant\n')[1].split('<|im_end|>')[0]
+                # TODO: update to using adequate assistant message header:
+                #generated_text = generated_text.split('>assistant')[1].split(self.tokenizer.special_tokens_map['eos_token'])[0]
+                # TODO : or assuming that eos token will be found at the end of each dialogue element:
+                generated_text = generated_text.split(self.tokenizer.special_tokens_map['eos_token'])[-2]#.split(self.tokenizer.special_tokens_map['eos_token'])[0]
 
                 # Find the section containing the relevant answer_ids using regex
                 match = re.search(r"answer_ids.*:\s*\[.*?\]", generated_text, re.DOTALL)
