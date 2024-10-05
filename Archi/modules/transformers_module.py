@@ -1,6 +1,7 @@
 from typing import Dict,List,Optional
 
 import torch
+import numpy as np
 import wandb
 from ordered_set import OrderedSet
 
@@ -12,6 +13,7 @@ from Archi.modules.utils import (
 
 import transformers
 from transformers import (
+    pipeline,
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig,
@@ -23,6 +25,9 @@ from peft import (
     LoraConfig,
     get_peft_model,
 )
+
+from pydantic import BaseModel, conint
+import yaml
 
 from Archi.utils import (
     STR2BT,
@@ -49,6 +54,8 @@ class ArchiTransformerModule(Module):
         model_id,
         id='ArchiTransformerModule_0',
         config={
+            'use_grammar': False,
+            'prompt_template':'{prompt}',
             'quantize':False,
             'bnb_config': {
                 'load_in_4bit':False,
@@ -89,8 +96,10 @@ class ArchiTransformerModule(Module):
         
         self.use_cuda = use_cuda
         self.generation_kwargs = self.config['generation_kwargs']
-        
+        self.prompt_template = self.config.get('prompt_template', '{prompt}')
         self.model_id = model_id
+        self.error_count = 0
+
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_id,
             trust_remote_code=True,
@@ -130,9 +139,46 @@ class ArchiTransformerModule(Module):
             self.model.gradient_checkpointing_disable()
 
         print_trainable_parameters(self.model)
+        self.pipeline = pipeline('text-generation', model=self.model, tokenizer=self.tokenizer)
 
     def reset(self):
         pass
+
+    def tokenize_options(self, prompts, options):
+        '''
+        Perfom tokenization for prompts and options separately,
+        with left padding for prompt and right padding for options,
+        so that the options can be processed using caching of the 
+        prompt.
+        '''
+        orig_padding_side = self.tokenizer.padding_side
+        self.tokenizer.padding_size = 'left'
+        batched_prompts_inputs = self.tokenizer(
+            prompts,
+            padding=True,
+            add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
+            return_tensors='pt',
+        )
+        self.tokenizer.padding_side = 'right'
+        list_batched_options_inputs = []
+        for pidx, opts in enumerate(options):
+            prompt = prompts[pidx]
+            prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
+            #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
+            popts = [prompt+opt for opt in opts]
+            t_popts = self.tokenizer(
+                popts,
+                padding=True,
+                add_special_tokens=False, #TODO: figure out whether it is necessary or not
+                return_tensors='pt',
+            )
+            # Remove the prompt elements:
+            for k in t_popts:
+                t_popts[k] = t_popts[k][:, prompt_len:]
+            list_batched_options_inputs.append(t_popts)
+        self.tokenizer.padding_side = orig_padding_side
+
+        return batched_prompts_inputs, list_batched_options_inputs
 
     def forward(self, x, gt_sentences=None, output_dict=None):
         '''
@@ -140,6 +186,7 @@ class ArchiTransformerModule(Module):
         then teacher forcing is implemented...
         '''
         split_options = False
+        split_questions = False 
 
         if gt_sentences is not None:
             gt_sentences = gt_sentences.long().to(x.device)
@@ -168,36 +215,27 @@ class ArchiTransformerModule(Module):
                 # it is a byteTensor from string:
                 decoded_x = BT2STR(x.to(torch.uint8))
                 # Are there options?
-                if '[OPTION]' in decoded_x[0]:
+                if '[NBR_QUESTIONS]' in decoded_x[0]:
+                    split_questions = True
+                    prompts = [dx.split('[NBR_QUESTIONS]')[0] for dx in decoded_x]
+                    nbr_questions = [int(dx.split('[NBR_QUESTIONS]')[1].split('[/NBR_QUESTIONS]')[0]) for dx in decoded_x]
+                    max_nbr_options = [int(dx.split('[MAX_NBR_OPTIONS]')[1].split('[/MAX_NBR_OPTIONS]')[0]) for dx in decoded_x]
+                elif '[OPTION]' in decoded_x[0]:
                     split_options = True
                     prompts = [dx.split('[/PROMPT]')[0] for dx in decoded_x]
                     options = [dx.split('[/PROMPT]')[1].split('[OPTION]') for dx in decoded_x]
-                    orig_padding_side = self.tokenizer.padding_side
-                    self.tokenizer.padding_size = 'left'
-                    batched_prompts_inputs = self.tokenizer(
-                        prompts,
-                        padding=True,
-                        add_special_tokens=False, #TODO : it is probably necessary but unclear how, unless for space regulations.
-                        return_tensors='pt',
+                else:
+                    raise NotImplementedError
+                
+                if not self.config['use_grammar']:
+                    # Adding prompt template:
+                    prompts = [self.prompt_template.format(p) for p in prompts]
+
+                    batched_prompts_inputs, \
+                    list_batched_options_inputs = self.tokenize_options(
+                        prompts=prompts,
+                        options=options,
                     )
-                    self.tokenizer.padding_side = 'right'
-                    list_batched_options_inputs = []
-                    for pidx, opts in enumerate(options):
-                        prompt = prompts[pidx]
-                        prompt_len = self.tokenizer(prompt, add_special_tokens=False, return_tensors='pt').input_ids.shape[-1]
-                        #prompt_len = batched_prompts_inputs.input_ids.shape[-1]
-                        popts = [prompt+opt for opt in opts]
-                        t_popts = self.tokenizer(
-                            popts,
-                            padding=True,
-                            add_special_tokens=False, #TODO: figure out whether it is necessary or not
-                            return_tensors='pt',
-                        )
-                        # Remove the prompt elements:
-                        for k in t_popts:
-                            t_popts[k] = t_popts[k][:, prompt_len:]
-                        list_batched_options_inputs.append(t_popts)
-                    self.tokenizer.padding_side = orig_padding_side
                 else:
                     orig_padding_side = self.tokenizer.padding_side
                     self.tokenizer.padding_side = 'right'
@@ -220,24 +258,191 @@ class ArchiTransformerModule(Module):
         else:
             raise NotImplementedError
         
-        if not split_options:
+        if not split_options and not split_questions:
             return self._forward_inference(
                 output_dict=output_dict,
                 batched_inputs=batched_inputs,
                 gt_sentences=gt_sentences,
             )
-        if self.config.get('use_nocache', False):
-            return self._forward_options_nocache(
-                output_dict=output_dict,
-                batched_prompts_inputs=batched_prompts_inputs,
-                list_batched_options_inputs=list_batched_options_inputs,
-            )
+       
+        if self.config['use_grammar']:
+            if split_options:
+                raise NotImplementedError
+            elif split_questions:
+                return self._forward_grammar_questions(
+                    output_dict=output_dict,
+                    prompts=prompts,
+                    nbr_questions=nbr_questions,
+                    max_nbr_options=max_nbr_options,                        
+                )
+            else:
+                raise NotImplementedError
 
-        return self._forward_options_cache(
+        if self.config.get('use_nocache', False):
+            self._forward_options = self.forward_options_nocache
+        else:
+            self._forward_options = self._forward_options_cache
+
+        return self._forward_options(
             output_dict=output_dict,
             batched_prompts_inputs=batched_prompts_inputs,
             list_batched_options_inputs=list_batched_options_inputs,
         )
+
+    def forward_grammar_questions_transformers(
+        self, 
+        prompt:str, 
+        max_options_batch_size:int, 
+        max_questions_batch_size:int,
+    ):
+        '''
+        :param prompt: str formatted with up to :param max_questions_batch_size: closed-form questions, 
+          which should be answered with up to :param max_options_batch_size: possible answers.
+        :param max_options_batch_size: int
+        :param max_questions_batch_size: int
+        :return responses: torch.Tensor of shape (max_questions_batch_size, max_options_batch_size)
+        '''
+        class MultiQuestionMultiChoiceAnswer(BaseModel):
+            answer_ids: List[conint(ge=0, le=max_options_batch_size-1)]
+        responded = False
+        attempt_count = 0
+        list_errors = []
+        import ipdb; ipdb.set_trace()
+        while not responded and attempt_count < 5:  # Limit the number of retries to avoid infinite loop
+            try:
+                # Generate the formatted prompt
+                pans = f"{prompt}\n"
+                pans += f"Please use the following schema: {MultiQuestionMultiChoiceAnswer.model_json_schema()}\n"
+                pans += f"Make sure to concatenate the answers to all (implicit and explicit) questions in your output!\n"
+                pans += f"The list of answer_ids must contain {max_questions_batch_size} elements.\n"
+                example_answer_ids = [np.random.randint(max_options_batch_size) for _ in range(max_questions_batch_size)]
+                example_answer = MultiQuestionMultiChoiceAnswer(answer_ids=example_answer_ids).model_dump()
+                pans += f"For example, your final answer should look like:\n```json\n{example_answer}\n```\n\n" 
+                # Append potential error feedback if this is not the first attempt
+                if attempt_count > 0:
+                    pans += f"\nBe careful to not trigger the following possible error: "
+                    for error in list_errors: pans += f"{error}\n"
+                pans = self.prompt_template.format(prompt=pans)
+
+                messages = [{"role": "user", "content": pans}]
+                input_text = self.tokenizer.apply_chat_template(
+                    messages, 
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+                tokenized_input_text = self.tokenizer.encode(input_text, return_tensors="pt")
+                response = self.model.generate(
+                    tokenized_input_text, 
+                    **self.generation_kwargs,
+                )
+                #response = self.pipeline(pans, **self.generation_kwargs)
+
+                # Extract the generated text from the response
+                #generated_text = response[0]['generated_text']
+                generated_text = self.tokenizer.decode(response[0], skip_special_tokens=False)
+                generated_text = generated_text.split('im_start|>assistant\n')[1].split('<|im_end|>')[0]
+
+                # Find the section containing the relevant answer_ids using regex
+                match = re.search(r"answer_ids.*:\s*\[.*?\]", generated_text, re.DOTALL)
+                if match:
+                    relevant_text = match.group(0).replace("'","").replace('"',"")
+
+                    # Convert the relevant text into a dictionary
+                    responses_model = yaml.safe_load(f"{{{relevant_text}}}")
+
+                    # Validate and convert the parsed response to a tensor
+                    validated_response = MultiQuestionMultiChoiceAnswer(**responses_model)
+                    responses = torch.tensor(validated_response.answer_ids, dtype=torch.long).reshape(max_questions_batch_size, 1)
+                    responses = torch.clamp(responses, min=0, max=max_options_batch_size-1)
+                    responded = True  # Successfully parsed and validated the response
+                else:
+                    raise ValueError("Relevant answer_ids section not found in the generated text.")
+
+            except Exception as e:
+                self.error_count += 1
+                list_errors.append(str(e))  # Store the error message
+                print(f"ArchiTransformersModule: error {self.error_count}: exception caught: {e}")
+                attempt_count += 1
+
+        if not responded:
+            # Return a tensor of zeros if all attempts fail
+            responses = torch.zeros((max_questions_batch_size, 1), dtype=torch.long)
+        return responses 
+
+    def _forward_grammar_questions(
+        self,
+        output_dict,
+        prompts:List[str],
+        nbr_questions:List[int],
+        max_nbr_options:List[int],
+    ):
+        '''
+        This function is a wrapper for _forward_grammar_questions_hf or _forward_grammar_questions_openai.
+        It will call the appropriate function based on the value of self.openai_model,
+        which is set in the constructor, based on whether model_id contains 'openai'.
+        It will use Structured Outputs/Grammar/JSON to extract answers among to 
+        the :param nbr_questions: questions found in the prompts, among 
+        the :param max_nbr_options: options, and update the output_dict accordingly.
+
+        :param output_dict: Dict to update with results.
+        :param prompts: list of strings
+        :param nbr_questions: list of integers
+        :param max_nbr_options: list of integers
+        :return lchosen_options: (prompt_batch_size x nbr_questions x 1)
+        ''' 
+         
+        responses = []
+        max_option_batch_size = max(max_nbr_options)
+        max_question_batch_size = max(nbr_questions)
+        for pidx, prompt in enumerate(prompts):
+            response = self.forward_grammar_questions_transformers(prompt, max_option_batch_size, max_question_batch_size)
+            # (max_question_batch_size x max_option_batch_size) 
+            responses.append(response)        
+        response = torch.stack(responses, dim=0)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+ 
+        lsoptions_likelihoods = torch.zeros(len(prompts), max_question_batch_size, max_option_batch_size)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+        lsoptions_likelihoods = lsoptions_likelihoods.scatter_(
+            dim=-1, 
+            index=response, 
+            src=torch.ones_like(response, dtype=lsoptions_likelihoods.dtype),
+        )
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+
+        slhidden_states = torch.zeros(len(prompts), max_question_batch_size, max_option_batch_size, self.config.get('hidden_size', 32))
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size x hidden_size)
+        lsoptions_perplexities = lsoptions_likelihoods*(-1)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+        
+        # Option choosing with log:
+        lsoptions_probs = lsoptions_likelihoods#.softmax(dim=-1)
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x max_question_batch_size x 1)
+        else:
+            lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            #lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x max_question_batch_size x 1)
+        
+        # Legal choices:
+        legal_choices = (lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_question_batch_size x max_option_batch_size)
+
+        if output_dict is not None:
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states#[:,:,-1,...]
+            output_dict['chosen_options'] = lchosen_options
+            output_dict['prediction_probs'] = lsoptions_probs
+            output_dict['prediction_perplexities'] = lsoptions_perplexities 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+
+        return lchosen_options #spredicted_logits
 
     def _forward_options_nocache(
         self,
