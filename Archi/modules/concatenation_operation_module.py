@@ -40,7 +40,10 @@ class ConcatenationOperationModule(Module):
 
         
     def forward(self, **inputs):
-        output = torch.cat([v.cuda() if self.config['use_cuda'] else v for k,v in inputs.items()], dim=self.config['dim'])
+        inputs = [v.cuda() if self.config['use_cuda'] else v for k,v in inputs.items()]
+        batch_size = inputs[0].shape[0]
+        inputs = [v.reshape(batch_size, -1) for v in inputs]
+        output = torch.cat(inputs, dim=self.config['dim'])
         return output
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
