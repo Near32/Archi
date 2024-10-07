@@ -210,11 +210,11 @@ class Model(Module):
         self.reset()
 
         self.output_stream_dict = self._forward(
-	    pipelines=pipelines,
+	          pipelines=pipelines,
             obs=obs,
             action=action,
-	    **rnn_states,
-	)
+	          **rnn_states,
+        )
         
         id2output = {
             "a":"outputs:a",

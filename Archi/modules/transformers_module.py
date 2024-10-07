@@ -235,7 +235,7 @@ class ArchiTransformerModule(Module):
                 
                 if not self.config['use_grammar']:
                     # Adding prompt template:
-                    prompts = [self.prompt_template.format(p) for p in prompts]
+                    prompts = [self.prompt_template.format(prompt=prompt) for prompt in prompts]
 
                     batched_prompts_inputs, \
                     list_batched_options_inputs = self.tokenize_options(
@@ -833,6 +833,10 @@ class ArchiTransformerModule(Module):
                 dim=-1,
             )
             tokenized_predictions.append(tokenized_prediction)
+            #TODO: if using backpropagation through the communication channel,
+            # then it will be necessary to update everything above, assuming the message 
+            # is already tokenized after going through STGS 
+            # and arange(vocab_size)+sum(dim=-1) trick.
             option_outputs = self.model(
                 input_ids=batched_options_inputs.input_ids,
                 # WARNING: providing the attention_mask is not working, but not necessary since we have right-padded the options.
@@ -954,11 +958,14 @@ class ArchiTransformerModule(Module):
             )
             output_dict['legal_choices'] = legal_choices
             # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            import ipdb; ipdb.set_trace()
+            #TODO: figure out shapES:
             output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
             if self.config.get('output_last_hidden_states', False):  output_dict['last_hidden_states'] = slhidden_states
             #'tokenized_option_prediction': tokenized_option_predictions,
             if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions
             output_dict['chosen_options'] = lchosen_options
+            import ipdb; ipdb.set_trace()
             if self.config.get('output_logits', False): output_dict['prediction_logits'] = spredicted_logits
             output_dict['prediction_probs'] = lsoptions_probs
             output_dict['prediction_perplexities'] = lsoptions_perplexities 
