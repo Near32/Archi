@@ -822,7 +822,7 @@ class ArchiTransformerModule(Module):
                 pkv = transformers.DynamicCache.from_legacy_cache(pkv)
                 cache_kwargs = {
                     'past_key_values': pkv,
-                    'cache_position': torch.arange(prompt_len,prompt_len+option_len),
+                    'cache_position': torch.arange(prompt_len,prompt_len+option_len).to(self.model.device),
                 }
 
             # Check that attention and other elements are ok?
@@ -956,22 +956,24 @@ class ArchiTransformerModule(Module):
                 for tk in tokenized_predictions],
                 dim=0,
             )
-            output_dict['legal_choices'] = legal_choices
+            output_dict['legal_choices'] = legal_choices.cpu()
             # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
-            import ipdb; ipdb.set_trace()
-            #TODO: figure out shapES:
-            output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
-            if self.config.get('output_last_hidden_states', False):  output_dict['last_hidden_states'] = slhidden_states
+            output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...].cpu()
+            # batch_size x max_option_len x max_sentence_len=1 x hidden_state_dim
+            if self.config.get('output_last_hidden_states', False):  output_dict['last_hidden_states'] = slhidden_states.cpu()
             #'tokenized_option_prediction': tokenized_option_predictions,
-            if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions
-            output_dict['chosen_options'] = lchosen_options
-            import ipdb; ipdb.set_trace()
-            if self.config.get('output_logits', False): output_dict['prediction_logits'] = spredicted_logits
-            output_dict['prediction_probs'] = lsoptions_probs
-            output_dict['prediction_perplexities'] = lsoptions_perplexities 
-            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+            if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions.cpu()
+            output_dict['chosen_options'] = lchosen_options.cpu()
+            if self.config.get('output_logits', False): output_dict['prediction_logits'] = spredicted_logits.cpu()
+            # batch_size x max_option_len x max_sentence_len x hidden_state_dim
+            output_dict['prediction_probs'] = lsoptions_probs.cpu()
+            # batch_size x max_option_len 
+            output_dict['prediction_perplexities'] = lsoptions_perplexities.cpu()
+            # batch_size x max_option_len 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods.cpu()
+            # batch_size x max_option_len 
 
-        return lchosen_options #spredicted_logits
+        return lchosen_options.cpu() #spredicted_logits
  
     
     def _forward_inference(
