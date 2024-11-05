@@ -2,6 +2,7 @@ from typing import Dict,List,Optional
 
 import os
 import re
+import gc
 import torch
 import numpy as np
 import wandb
@@ -27,6 +28,8 @@ from peft import (
     LoraConfig,
     get_peft_model,
 )
+from accelerate import Accelerator
+from unsloth import FastLanguageModel
 
 from pydantic import BaseModel, conint
 import yaml
@@ -102,14 +105,6 @@ class ArchiTransformerModule(Module):
         self.model_id = model_id
         self.error_count = 0
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-            token=os.getenv('HF_TOKEN'),
-        )
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-        
         self.quantization_config = None
         if self.config['quantize']:
             if isinstance(self.config['bnb_config']['bnb_4bit_compute_dtype'], str):
@@ -121,31 +116,110 @@ class ArchiTransformerModule(Module):
             self.quantization_config = BitsAndBytesConfig(
                 **self.config['bnb_config'],
             )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            pretrained_model_name_or_path=self.model_id,
-            quantization_config=self.quantization_config,
-            #device_map={"":0} if self.use_cuda else 'auto',
-            # MULTI-GPU automatic loading of the different shards:
-            device_map='auto',
-            trust_remote_code=True,
-            token=os.getenv('HF_TOKEN'),
-        )
+        
+        if self.config['use_unsloth']:
+            self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+                model_name=self.model_id,
+                #max_seq_length = max_seq_length,
+                #dtype = dtype,
+                #load_in_4bit = load_in_4bit,
+                quantization_config=self.quantization_config,
+                #device_map={"":0} if self.use_cuda else 'auto',
+                # MULTI-GPU automatic loading of the different shards:
+                #device_map='auto',
+                trust_remote_code=True,
+                token=os.getenv('HF_TOKEN'),
+                #torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                attn_implementation="flash_attention_2",
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                pretrained_model_name_or_path=self.model_id,
+                quantization_config=self.quantization_config,
+                #device_map={"":0} if self.use_cuda else 'auto',
+                # MULTI-GPU automatic loading of the different shards:
+                #device_map='auto',
+                trust_remote_code=True,
+                token=os.getenv('HF_TOKEN'),
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                attn_implementation="flash_attention_2",
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_id,
+                trust_remote_code=True,
+                token=os.getenv('HF_TOKEN'),
+            )
+        
+        if self.tokenizer.pad_token is None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+        
         if not self.use_cuda:   self.model = self.model.cpu()
 
-        if self.config['quantize']:
-            self.model = prepare_model_for_kbit_training(self.model)
-
-        if self.config['use_lora']:
-            self.lora_config = LoraConfig(**self.config['lora_config'])
-            self.model = get_peft_model(self.model, self.lora_config)
-        
-        if self.config['gradient_checkpointing']:
-            self.model.gradient_checkpointing_enable()
+        if self.config['use_unsloth']:
+            self.model = FastLanguageModel.get_peft_model(
+                self.model,
+                **self.config['lora_config'],
+                #r = 16, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+                #target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
+                #  "gate_proj", "up_proj", "down_proj",],
+                #lora_alpha = 16,
+                #lora_dropout = 0, # Supports any, but = 0 is optimized
+                #bias = "none",    # Supports any, but = "none" is optimized
+                # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
+                use_gradient_checkpointing="unsloth" if self.config['gradient_checkpointing'] else False, # True or "unsloth" for very long context
+                random_state = 3407,
+                use_rslora = False,  # We support rank stabilized LoRA
+                loftq_config = None, # And LoftQ
+            )
         else:
-            self.model.gradient_checkpointing_disable()
+            if self.config['quantize']:
+                self.model = prepare_model_for_kbit_training(self.model)
+
+            if self.config['use_lora']:
+                self.lora_config = LoraConfig(
+                    **self.config['lora_config'],
+                    task_type='CAUSAL_LM',
+                )
+                self.model = get_peft_model(self.model, self.lora_config)
+        
+            if self.config['gradient_checkpointing']:
+                self.model.gradient_checkpointing_enable()
+            else:
+                self.model.gradient_checkpointing_disable()
+        
+
+        if 'accelerator' in self.config['multi_gpu_strategy']:
+            self.accelerator = Accelerator()
+            self.device = self.accelerator.device #torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            #self.model = torch.nn.DataParallel(self.model)
+            # PREVIOUSLY:self.model = self.model.to(self.device)
+            self.model = self.accelerator.prepare(self.model)#.to(self.device)
+        elif 'fsdp' in self.config['multi_gpu_strategy']:
+            import torch.distributed as dist
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            from torch.distributed.fsdp import ShardingStrategy
+            os.environ['MASTER_ADDR'] = 'localhost'
+            os.environ['MASTER_PORT'] = '12355'
+
+            dist.init_process_group(
+                backend='nccl',
+                rank=torch.cuda.device_count(),
+                world_size=1,
+            )
+            self.model = FSDP(
+                self.model,
+                sharding_stragey=ShardingStrategy.FULL_SHARD,
+                mixed_precision=True,
+            )
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.model = self.model.to(self.device)
+        else:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         print_trainable_parameters(self.model)
-        self.pipeline = pipeline('text-generation', model=self.model, tokenizer=self.tokenizer)
+        #self.pipeline = pipeline('text-generation', model=self.model, tokenizer=self.tokenizer)
 
     def reset(self):
         pass
@@ -158,7 +232,7 @@ class ArchiTransformerModule(Module):
         prompt.
         '''
         orig_padding_side = self.tokenizer.padding_side
-        self.tokenizer.padding_size = 'left'
+        self.tokenizer.padding_side = 'left'
         batched_prompts_inputs = self.tokenizer(
             prompts,
             padding=True,
@@ -285,7 +359,7 @@ class ArchiTransformerModule(Module):
                 raise NotImplementedError
 
         if self.config.get('use_nocache', False):
-            self._forward_options = self.forward_options_nocache
+            self._forward_options = self._forward_options_nocache
         else:
             self._forward_options = self._forward_options_cache
 
@@ -462,8 +536,15 @@ class ArchiTransformerModule(Module):
         batched_prompts_inputs,
         list_batched_options_inputs,
     ):
+        verbose = True 
+        if verbose:
+            print(f"\n\nGPU: {torch.cuda.max_memory_allocated()/(1024**3)} Gb.")
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        
         prompts_batch_size = batched_prompts_inputs['input_ids'].shape[0]
-        batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
+        batch_prompts_inputs = batched_prompts_inputs#.to(self.device)
 
         '''
         #Forward prompts and retrieve past_key_values:
@@ -489,25 +570,24 @@ class ArchiTransformerModule(Module):
         '''
 
         # Compute the different options for each prompt:
-        max_option_len = 0
-        max_option_batch_size = 0
-        list_predicted_logits = []
         list_options_likelihoods = []
         llist_options_likelihoods = []
         list_options_perplexities = []
         llist_options_perplexities = []
 
+        prompt_len = batched_prompts_inputs['input_ids'].shape[1]
+        max_option_batch_size = max([batched_opt.input_ids.shape[0] for batched_opt in list_batched_options_inputs])
+        max_option_len = prompt_len + max([batched_opt.input_ids.shape[1] for batched_opt in list_batched_options_inputs])
+        if self.config.get('output_logits', False):
+            spredicted_logits = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, self.model.vocab_size) #predicted_logits.shape[-1])
+        lsoptions_likelihoods = (-torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
+        lsoptions_perplexities = (torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
         list_lhidden_states = []
         tokenized_predictions = []
         tokenized_option_predictions = []
         for prompt_idx in range(prompts_batch_size):
-            prompt_len = batched_prompts_inputs['input_ids'].shape[1]
-            batched_options_inputs = list_batched_options_inputs[prompt_idx].to(self.model.device)
+            batched_options_inputs = list_batched_options_inputs[prompt_idx]#.to(self.device)
             option_batch_size, option_len = batched_options_inputs['input_ids'].shape[0:2]
-            max_option_batch_size = max(max_option_batch_size, option_batch_size)
-            #max_option_len = max(max_option_len, option_len)
-            max_option_len = max(max_option_len, option_len+prompt_len)
-            
             '''
             # Select and Repeat pkv to fit to new input batch_size:
             pkv = [
@@ -536,59 +616,129 @@ class ArchiTransformerModule(Module):
                 cache_position=torch.arange(prompt_len,prompt_len+option_len),
                 return_dict=True,
             )
-            
             '''
             # Testing without pkv:
             nc_batched_options_inputs = {}
             for k in batched_options_inputs.keys():
+                # TODO: maybe remove the paddings from the prompts beforecat:
                 #nc_batched_options_inputs[k] = torch.cat(
                 batched_options_inputs[k] = torch.cat(
                         [batched_prompts_inputs[k][prompt_idx:prompt_idx+1].repeat(option_batch_size, 1), batched_options_inputs[k]], 
                     dim=-1,
-                )
-            tokenized_option_predictions.append(batched_options_inputs.input_ids)
-            tokenized_prediction = batched_options_inputs.input_ids
+                ).to(self.device)
+            tokenized_option_predictions.append(batched_options_inputs.input_ids.cpu())
+            tokenized_prediction = batched_options_inputs.input_ids.cpu()
             tokenized_predictions.append(tokenized_prediction)
             #print(repr(self.tokenizer.decode(batched_options_inputs.input_ids[0])))
             #import ipdb; ipdb.set_trace()
-            option_outputs = nc_option_outputs = self.model(
+            """
+            option_logits = []
+            option_hidden_states = []
+            for obidx in range(option_batch_size):
+                obidx_batched_options_inputs = {}
+                for k in batched_options_inputs.keys():
+                    obidx_batched_options_inputs[k] = batched_options_inputs[k][obidx:obidx+1].to(self.device)
+                #with self.accelerator.autocast():
+                option_outputs = nc_option_outputs = self.model(
                 #**nc_batched_options_inputs,
-                **batched_options_inputs,
+                #**batched_options_inputs,
+                **obidx_batched_options_inputs,
                 output_hidden_states=True,
                 use_cache=False,
                 return_dict=True,
+                )
+                '''
+                option_outputs = nc_option_outputs = self.pipeline(
+                input=batched_options_inputs['input_ids'],
+                output_hidden_states=True,
+                use_cache=False,
+                return_dict=True,
+                )
+                '''
+                hidden_states_size = option_outputs.hidden_states[-1].shape[-1]
+                option_logits.append(option_outputs.logits.cpu())
+                if self.config.get('output_last_token_lastt_hidden_states', False) \
+                or self.config.get('output_last_hidden_states', False):
+                    option_hidden_states.append(option_outputs.hidden_states[-1].cpu())
+                del option_outputs
+                torch.cuda.empty_cache()
+
+            option_logits = torch.cat(option_logits, dim=0).to(self.device)
+            """
+
+            if 'accelerator' in self.config['multi_gpu_strategy']:
+                #with self.accelerator.autocast():
+                option_outputs = nc_option_outputs = self.model(
+                    #**nc_batched_options_inputs,
+                    **batched_options_inputs,
+                    output_hidden_states=True,
+                    use_cache=False,
+                    return_dict=True,
+                )
+            elif 'fsdp' in self.config['multi_gpu_strategy']:
+                with torch.cuda.amp.autocast():
+                    option_outputs = nc_option_outputs = self.model(
+                        #**nc_batched_options_inputs,
+                        **batched_options_inputs,
+                        output_hidden_states=True,
+                        use_cache=False,
+                        return_dict=True,
+                    )
+            else:
+                option_outputs = nc_option_outputs = self.model(
+                    #**nc_batched_options_inputs,
+                    **batched_options_inputs,
+                    output_hidden_states=True,
+                    use_cache=False,
+                    return_dict=True,
+                )
+            hidden_states_size = option_outputs.hidden_states[-1].shape[-1]
+            '''
+            option_outputs = nc_option_outputs = self.pipeline(
+            input=batched_options_inputs['input_ids'],
+            output_hidden_states=True,
+            use_cache=False,
+            return_dict=True,
             )
-            
+            '''
             '''
             nc_logits = nc_option_outputs.logits
             same_nc_logits = nc_logits[:, prompt_len:]
             '''
 
-            option_lhidden_states = option_outputs.hidden_states[-1]
-            # (option_batch_size x sequence_length x embed_per_head_size)
-            '''
-            prompt_lhidden_states = prompts_lhidden_states[prompt_idx].repeat(option_batch_size, 1, 1)
-            full_lhidden_states = torch.cat([
-                prompt_lhidden_states,
-                option_lhidden_states],
-                dim=1,
-            )
-            # (option_batch_size x prompt_len + option_len x embed_size)
-            '''
-            full_lhidden_states = option_lhidden_states
-            list_lhidden_states.append(full_lhidden_states)
+            if self.config.get('output_last_token_last_hidden_states', False) \
+            or self.config.get('output_last_hidden_states', False):
+                #option_hidden_states = torch.cat(option_hidden_states, dim=0)
+                #option_lhidden_states = option_hidden_states 
+                option_lhidden_states = option_outputs.hidden_states[-1].cpu()
+                # (option_batch_size x sequence_length x embed_per_head_size)
+                '''
+                prompt_lhidden_states = prompts_lhidden_states[prompt_idx].repeat(option_batch_size, 1, 1)
+                full_lhidden_states = torch.cat([
+                    prompt_lhidden_states,
+                    option_lhidden_states],
+                    dim=1,
+                )
+                # (option_batch_size x prompt_len + option_len x embed_size)
+                '''
+                full_lhidden_states = option_lhidden_states
+                list_lhidden_states.append(full_lhidden_states)
             
-            predicted_logits = option_outputs.logits
+            #predicted_logits = option_logits 
+            predicted_logits = option_outputs.logits#.cpu()
+            del option_outputs
+            torch.cuda.empty_cache()
+
             '''
             all_predicted_logits = torch.cat([
                 prompts_predicted_logits[prompt_idx:prompt_idx+1].repeat(option_batch_size, 1, 1),
                 predicted_logits],
                 dim=1,
             )
-
             '''
             all_predicted_logits = predicted_logits
-            list_predicted_logits.append(predicted_logits)
+            if self.config.get('output_logits', False):
+                spredicted_logits[prompt_idx,:predicted_logits.shape[0],:predicted_logits.shape[1],...] = predicted_logits.cpu()
             # batch_size x max_sentence_length x vocab_size 
 
             predicted_sentences_length = []
@@ -596,15 +746,19 @@ class ArchiTransformerModule(Module):
             sentences_perplexities = []
     
             #Compute perplexity:
+            '''
             pl = predicted_logits
             #(option_batch_size x max_seq_len x vocab_size)
             softmaxed_pl = pl.softmax(dim=-1)
-            slhd = softmaxed_pl.gather(dim=-1, index=batched_options_inputs.input_ids.unsqueeze(-1)).squeeze(-1)
-            options_true_length = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
+            slhd = softmaxed_pl.gather(
+                dim=-1, 
+                index=batched_options_inputs.input_ids.cpu().unsqueeze(-1),
+            ).squeeze(-1)
+            options_true_length = (batched_options_inputs.input_ids.cpu() != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
             #(option_batch_size x 1)
             slhd = torch.pow(slhd, 1.0/options_true_length)
             #(option_batch_size x option_len)
-            notpadding_mask = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long()
+            notpadding_mask = (batched_options_inputs.input_ids.cpu() != self.tokenizer.pad_token_id).long()
             slhd = notpadding_mask*slhd+(1-notpadding_mask)*torch.ones_like(slhd)
             sentences_likelihoods = slhd #= slhd.cpu().prod(dim=-1).to(slhd.device)
             #(option_batch_size x option_len )
@@ -613,14 +767,18 @@ class ArchiTransformerModule(Module):
             
             list_options_likelihoods.append(sentences_likelihoods)
             list_options_perplexities.append(sentences_perplexities)
-        
+            '''
+
             #Compute perplexity with log:
-            lpl = all_predicted_logits #predicted_logits
+            lslhd = all_predicted_logits #predicted_logits
             #(option_batch_size x max_seq_len x vocab_size)
-            lsoftmaxed_pl = lpl.log_softmax(dim=-1)
-            lslhd = lsoftmaxed_pl.gather(dim=-1, index=batched_options_inputs.input_ids.unsqueeze(-1)).squeeze(-1)
+            lslhd = lslhd.log_softmax(dim=-1)
+            lslhd = lslhd.gather(
+                dim=-1, 
+                index=batched_options_inputs.input_ids.to(predicted_logits.device).unsqueeze(-1),
+            ).squeeze(-1)
             #lslhd = lsoftmaxed_pl.gather(dim=-1, index=tokenized_prediction.unsqueeze(-1)).squeeze(-1)
-            lnotpadding_mask = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).float()
+            lnotpadding_mask = (batched_options_inputs.input_ids.to(predicted_logits.device) != self.tokenizer.pad_token_id).float()
             #lnotpadding_mask = (tokenized_prediction != self.tokenizer.pad_token_id).float()
             #options_true_length = (batched_options_inputs.input_ids != self.tokenizer.pad_token_id).long().sum(dim=-1).unsqueeze(-1)
             #(option_batch_size x 1)
@@ -634,24 +792,25 @@ class ArchiTransformerModule(Module):
             lsentences_perplexities = torch.exp(-lsentences_likelihoods / (lnotpadding_mask.sum(dim=-1)+1e-8)) #1.0/(slhd+1e-8)
             # (option_batch_size x option_len)
             
-            llist_options_likelihoods.append(lsentences_likelihoods)
-            llist_options_perplexities.append(lsentences_perplexities)
-        
+            lsoptions_likelihoods[prompt_idx,:lsentences_likelihoods.shape[0]] = lsentences_likelihoods.cpu()
+            lsoptions_perplexities[prompt_idx,:lsentences_perplexities.shape[0]] = lsentences_perplexities.cpu()
+            #llist_options_likelihoods.append(lsentences_likelihoods)
+            #llist_options_perplexities.append(lsentences_perplexities)
+            
         # Stack all the hidden_states:
-        hidden_states_size = list_lhidden_states[-1].shape[-1]
-        slhidden_states = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, hidden_states_size)
-        for pidx in range(prompts_batch_size):
-            opt_lhs = list_lhidden_states[pidx]
-            slhidden_states[pidx, :opt_lhs.shape[0], :opt_lhs.shape[1], ...] = opt_lhs
+        if self.config.get('output_last_token_last_hidden_states', False) \
+        or self.config.get('output_last_hidden_states', False):
+            hidden_states_size = list_lhidden_states[-1].shape[-1]
+            slhidden_states = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, hidden_states_size)
+            for pidx in range(prompts_batch_size):
+                opt_lhs = list_lhidden_states[pidx]
+                slhidden_states[pidx, :opt_lhs.shape[0], :opt_lhs.shape[1], ...] = opt_lhs
         
+        '''
         # Stack all predicted_logits:
-        spredicted_logits = torch.zeros(prompts_batch_size, max_option_batch_size, max_option_len, predicted_logits.shape[-1])
         soptions_likelihoods = torch.ones(prompts_batch_size, max_option_batch_size, max_option_len)
         soptions_perplexities = torch.ones(prompts_batch_size, max_option_batch_size, max_option_len)
         for pidx in range(prompts_batch_size):
-            opt_logits = list_predicted_logits[pidx]
-            spredicted_logits[pidx,:opt_logits.shape[0],:opt_logits.shape[1],...] = opt_logits
-
             opt_lhd = list_options_likelihoods[pidx]
             soptions_likelihoods[pidx,:opt_lhd.shape[0],:opt_lhd.shape[1]] = opt_lhd
             # Regularise when there is less than max_option_batch_size options for this particular prompt:
@@ -661,8 +820,10 @@ class ArchiTransformerModule(Module):
             soptions_perplexities[pidx,:opt_ppl.shape[0],:opt_ppl.shape[1]] = opt_ppl
             # Regularise when there is less than max_option_batch_size options for this particular prompt:
             soptions_perplexities[pidx,opt_ppl.shape[0]:] = 0
+        '''
 
         # Stack all predicted_logits with log:
+        '''
         lsoptions_likelihoods = (-torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
         lsoptions_perplexities = (torch.inf)*torch.ones(prompts_batch_size, max_option_batch_size)
         for pidx in range(prompts_batch_size):
@@ -671,7 +832,9 @@ class ArchiTransformerModule(Module):
             
             opt_ppl = llist_options_perplexities[pidx]
             lsoptions_perplexities[pidx,:opt_ppl.shape[0]] = opt_ppl
-        
+        '''
+
+        '''
         # Option choosing: TODO WARNING! change to perplexity!!!
         soptions_probs = soptions_likelihoods.prod(dim=-1)
         # (prompt_batch_size x max_option_batch_size
@@ -684,7 +847,8 @@ class ArchiTransformerModule(Module):
         else:
             chosen_options = soptions_probs.argmax(dim=-1).unsqueeze(-1)
             # (prompt_batch_size x 1)
-        
+        '''
+
         # Option choosing with log:
         lsoptions_probs = ((-1)*lsoptions_perplexities).softmax(dim=-1) #lsoptions_likelihoods.softmax(dim=-1)
         #lsoptions_probs = lsoptions_perplexities 
@@ -725,8 +889,13 @@ class ArchiTransformerModule(Module):
             )
             output_dict['legal_choices'] = legal_choices
             # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
-            output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
-            if self.config.get('output_last_hidden_states', False): output_dict['last_hidden_states'] = slhidden_states
+            if self.config.get('output_last_token_last_hidden_states', False):
+                output_dict['last_token_last_hidden_states'] = slhidden_states[:,:,-1,...]
+            else:
+                lt_slhidden_states = torch.zeros(prompts_batch_size, max_option_batch_size, hidden_states_size)
+                output_dict['last_token_last_hidden_states'] = lt_slhidden_states
+            if self.config.get('output_last_hidden_states', False): 
+                output_dict['last_hidden_states'] = slhidden_states
             #output_dict['tokenized_option_prediction'] = tokenized_option_predictions
             if self.config.get('output_tokenized_prediction', False):   output_dict['tokenized_prediction'] = tokenized_predictions
             output_dict['chosen_options'] = lchosen_options
@@ -738,7 +907,7 @@ class ArchiTransformerModule(Module):
             #output_dict['prediction_perplexities'] = soptions_perplexities
             output_dict['prediction_perplexities'] = lsoptions_perplexities
 
-        return spredicted_logits
+        return lsoptions_perplexities #spredicted_logits
 
     def _forward_options_cache(
         self,
@@ -747,7 +916,7 @@ class ArchiTransformerModule(Module):
         list_batched_options_inputs,
     ):
         prompts_batch_size = batched_prompts_inputs['input_ids'].shape[0]
-        batch_prompts_inputs = batched_prompts_inputs.to(self.model.device)
+        batch_prompts_inputs = batched_prompts_inputs.to(self.device)
 
         #Forward prompts and retrieve past_key_values:
         if 'RWKV' in self.model_id:
@@ -800,7 +969,7 @@ class ArchiTransformerModule(Module):
         tokenized_option_predictions = []
         for prompt_idx in range(prompts_batch_size):
             prompt_len = batched_prompts_inputs['input_ids'].shape[1]
-            batched_options_inputs = list_batched_options_inputs[prompt_idx].to(self.model.device)
+            batched_options_inputs = list_batched_options_inputs[prompt_idx].to(self.device)
             option_batch_size, option_len = batched_options_inputs['input_ids'].shape[0:2]
             max_option_batch_size = max(max_option_batch_size, option_batch_size)
             #max_option_len = max(max_option_len, option_len)
@@ -808,21 +977,21 @@ class ArchiTransformerModule(Module):
             # Select and Repeat pkv to fit to new input batch_size:
             if 'RWKV' in self.model_id:
                 pkv = [
-                    pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size, *[1 for _ in range(len(pkv_t.shape)-1)]).to(self.model.device)
+                    pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size, *[1 for _ in range(len(pkv_t.shape)-1)]).to(self.device)
                     for pkv_t in past_key_values
                 ]
                 cache_kwargs = {'state': pkv} 
             else:
                 pkv = [
                     [
-                        pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size,1, 1, 1).to(self.model.device)
+                        pkv_t[prompt_idx:prompt_idx+1, ...].clone().repeat(option_batch_size,1, 1, 1).to(self.device)
                         for pkv_t in pkv_tuple
                     ] for pkv_tuple in past_key_values
                 ]
                 pkv = transformers.DynamicCache.from_legacy_cache(pkv)
                 cache_kwargs = {
                     'past_key_values': pkv,
-                    'cache_position': torch.arange(prompt_len,prompt_len+option_len).to(self.model.device),
+                    'cache_position': torch.arange(prompt_len,prompt_len+option_len).to(self.device),
                 }
 
             # Check that attention and other elements are ok?
@@ -983,7 +1152,7 @@ class ArchiTransformerModule(Module):
         gt_sentences,
     ):
         batch_size = batched_inputs['input_ids'].shape[0]
-        batch_inputs = batched_inputs.to(self.model.device)
+        batch_inputs = batched_inputs.to(self.device)
 
         if gt_sentences is None:
             '''
