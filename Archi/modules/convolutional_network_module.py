@@ -392,6 +392,8 @@ class ConvolutionalNetworkModule(Module):
     def _compute_feat_map(self, x):
         feat_map = x 
         if self.cnn is not None:
+            if self.use_cuda:
+                x = x.cuda()
             feat_map = self.cnn(x)
         return feat_map 
 
