@@ -9,7 +9,7 @@ import torch.nn.functional as F
 
 from Archi.modules.module import Module 
 
-from Archi.modules.utils import layer_init
+from Archi.modules.utils import layer_init, ride_init
 
 
 class addXYfeatures(nn.Module) :
@@ -192,6 +192,8 @@ class ConvolutionalNetworkModule(Module):
         config=None,
         input_stream_ids=None,
         output_stream_ids={},
+        layer_init_fn=layer_init,
+        use_ride_init=False,
         use_cuda=False,
     ):
         '''
@@ -218,6 +220,9 @@ class ConvolutionalNetworkModule(Module):
             input_stream_ids=input_stream_ids,
             output_stream_ids=output_stream_ids,
         )
+        
+        if use_ride_init:   
+            layer_init_fn = ride_init
 
         original_conv_fn = nn.Conv2d
         if use_coordconv is not None:
@@ -308,7 +313,7 @@ class ConvolutionalNetworkModule(Module):
                     channels[idx] = cfg
                     
                 layer = conv_fn(in_ch, cfg, kernel_size=k, stride=s, padding=p, bias=not(add_bn)) 
-                layer = layer_init(layer, w_scale=math.sqrt(2))
+                layer = layer_init_fn(layer, w_scale=math.sqrt(2))
                 in_ch = cfg
                 self.cnn.append(layer)
                 if add_bn:
@@ -367,7 +372,7 @@ class ConvolutionalNetworkModule(Module):
                     cfg = int(nbr_out[2:])
                     nbr_out = cfg
                     # Assumes 'BNX' where X is an integer...
-                self.fcs.append( layer_init(nn.Linear(nbr_in, nbr_out), w_scale=math.sqrt(2)))
+                self.fcs.append( layer_init_fn(nn.Linear(nbr_in, nbr_out), w_scale=math.sqrt(2)))
                 if add_bn:
                     self.fcs.append(nn.BatchNorm1d(nbr_out))
                 #if lidx != (nbr_fclayers-1):

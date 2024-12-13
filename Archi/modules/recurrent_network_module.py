@@ -104,6 +104,7 @@ class LSTMModule(Module):
         niteration = [it+1 for it in iteration]
 
         next_hstates, next_cstates = [], []
+        nhx = x
         for idx, (layer, hx, cx) in enumerate(zip(self.layers, hidden_states, cell_states) ):
             batch_size = x.size(0)
             if hx.size(0) == 1: # then we have just resetted the values, we need to expand those:
@@ -113,11 +114,11 @@ class LSTMModule(Module):
                 raise NotImplementedError("Sizes of the hidden states and the inputs do not coincide.")
 
             if self.use_cuda:
-                x = x.cuda()
+                nhx = nhx.cuda()
                 hx = hx.cuda()
                 cx = cx.cuda()
 
-            nhx, ncx = layer(x, (hx, cx))
+            nhx, ncx = layer(nhx, (hx, cx))
             next_hstates.append(nhx)
             next_cstates.append(ncx)
             # Consider not applying activation functions on last layer's output
