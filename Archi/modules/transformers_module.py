@@ -42,8 +42,10 @@ from Archi.utils import (
     BT2STR,
 )
 
-import dspy
-
+try:
+    import dspy
+except Exception as e:
+    print("Please install dspy, if you want to use it.")
 
 def print_trainable_parameters(model):
     """
