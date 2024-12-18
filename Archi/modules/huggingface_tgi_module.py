@@ -12,19 +12,22 @@ from Archi.modules.utils import (
     apply_on_hdict,
 )
 
-import transformers
-from transformers import (
-    AutoTokenizer,
-)
-
 from Archi.utils import (
     STR2BT,
     BT2STR,
 )
 
 
-import huggingface_hub
-from huggingface_hub import InferenceClient
+try:
+    import transformers
+    from transformers import (
+        AutoTokenizer,
+    )
+    import huggingface_hub
+    from huggingface_hub import InferenceClient
+except Exception as e:
+    print(e)
+
 from pydantic import BaseModel, conint
 import yaml
 

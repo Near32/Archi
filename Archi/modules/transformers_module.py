@@ -14,22 +14,22 @@ from Archi.modules.utils import (
     apply_on_hdict,
 )
 
-import transformers
-from transformers import (
-    pipeline,
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
-    Cache,
-    DynamicCache,
-)
-from peft import (
-    prepare_model_for_kbit_training,
-    LoraConfig,
-    get_peft_model,
-)
-from accelerate import Accelerator
 try:
+    import transformers
+    from transformers import (
+        pipeline,
+        AutoTokenizer,
+        AutoModelForCausalLM,
+        BitsAndBytesConfig,
+        Cache,
+        DynamicCache,
+    )
+    from peft import (
+        prepare_model_for_kbit_training,
+        LoraConfig,
+        get_peft_model,
+    )
+    from accelerate import Accelerator
     from unsloth import FastLanguageModel
 except Exception as e:
     print(e)
