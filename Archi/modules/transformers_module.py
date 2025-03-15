@@ -787,6 +787,11 @@ class ArchiTransformerModule(Module):
             #(option_batch_size x option_len)
             #print('cache option: ', lslhd.shape)
             #print(lslhd)
+            if self.config['compute_perplexity_only_over_option']:
+                # WARNING: what about (right) paddings?
+                # No problem, they have been zero-ed out just above...
+                lslhd = lslhd[:,-option_len:]
+                lnotpadding_mask = lnotpadding_mask[:,-option_len:]
             lsentences_likelihoods = lslhd.sum(dim=-1) #= slhd.cpu().prod(dim=-1).to(slhd.device)
             #(option_batch_size x option_len )
             lsentences_perplexities = torch.exp(-lsentences_likelihoods / (lnotpadding_mask.sum(dim=-1)+1e-8)) #1.0/(slhd+1e-8)
