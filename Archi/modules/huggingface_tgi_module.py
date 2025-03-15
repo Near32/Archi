@@ -12,21 +12,29 @@ from Archi.modules.utils import (
     apply_on_hdict,
 )
 
-import transformers
-from transformers import (
-    AutoTokenizer,
-)
-
 from Archi.utils import (
     STR2BT,
     BT2STR,
 )
 
 
-import huggingface_hub
-from huggingface_hub import InferenceClient
+try:
+    import transformers
+    from transformers import (
+        AutoTokenizer,
+    )
+    import huggingface_hub
+    from huggingface_hub import InferenceClient
+except Exception as e:
+    print(e)
+
 from pydantic import BaseModel, conint
 import yaml
+
+try:
+    import dspy 
+except Exception as e:
+    print("Please install dspy, if you want to use it.")
 
 try:
     import openai
@@ -34,12 +42,34 @@ try:
 except Exception as e:
     print("Please install openai and tiktoken if you want to use OpenAI API.")
 
+
+import importlib.util
+import sys
+from pathlib import Path
+
+def import_from_path(file_path, name):
+    file_path = Path(file_path).resolve()
+    spec = importlib.util.spec_from_file_location("dynamic_module", file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["dynamic_module"] = module
+    spec.loader.exec_module(module)
+    return getattr(module, name)
+
+
 class ArchiHFTGIModule(Module):
     def __init__(
         self,
         model_id,
         id='ArchiHFTGIModule_0',
         config={
+            'use_dspy': False,
+            'dspy_config':{
+                'dspy_file_path':"",
+                'module_name':"",
+                'module_kwargs':{},
+                'input_formatting_fn':"",
+                'output_formatting_fn':"",
+            },
             'use_grammar': False,
             'prompt_template':'{prompt}',
             'generation_kwargs': {
@@ -72,13 +102,56 @@ class ArchiHFTGIModule(Module):
 
         self.openai_model = ('openai' in model_id[:7].lower())
 
+        self.original_model_id = self.model_id
         if self.openai_model:
             self.model_id = self.model_id.split("openai/")[-1]
             self.init_openai()
+            self._forward_model = self.forward_openai
         else:
             self.init_hf()
+            self._forward_model = self.forward_hf
+        
+        if self.config.get('use_dspy', False):
+            if 'openai' not in self.original_model_id:
+                model_id = 'huggingface/'+self.original_model_id
+            else:
+                model_id = self.original_model_id
+            self.model = dspy.LM(
+                model=model_id,
+                api_key=self.api_key,
+            )
+            '''
+            model_id = self.original_model_id
+            self.model = dspy.HFClientTGI(
+                model=model_id,
+                api_key=self.api_key,
+            )
+            '''
+            self.model = dspy.LM(
+                model=model_id,
+                api_key=self.api_key,
+            )
+            dspy.configure(lm=self.model)
+            # Load from the specified file
+            DSPyModuleClass = import_from_path(
+                file_path=self.config['dspy_config']['dspy_file_path'],
+                name=self.config['dspy_config']['module_name'],
+            )
+            # Instantiate: 
+            self.dspy_module = DSPyModuleClass(
+                **self.config['dspy_config']['module_kwargs'],
+            )
+            self.dspy_input_formatting_fn = import_from_path(
+                file_path=self.config['dspy_config']['dspy_file_path'],
+                name=self.config['dspy_config']['input_formatting_fn'],
+            )
+            self.dspy_output_formatting_fn = import_from_path(
+                file_path=self.config['dspy_config']['dspy_file_path'],
+                name=self.config['dspy_config']['output_formatting_fn'],
+            )
 
     def init_openai(self):
+        self.api_key = os.environ.get("OPENAI_API_TOKEN", "")
         self.model = openai.OpenAI(api_key=os.environ.get("OPENAI_API_TOKEN",""))
         # TODO: use tiktoken if they geet a padding mechanism ...
         #self.tokenizer = tiktoken.encoding_for_model(self.model_id)
@@ -88,6 +161,7 @@ class ArchiHFTGIModule(Module):
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
     def init_hf(self):
+        self.api_key = os.environ.get("HF_API_TOKEN", "")
         huggingface_hub.login(
             token=os.getenv("HF_API_TOKEN", "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"),
         )
@@ -189,7 +263,15 @@ class ArchiHFTGIModule(Module):
 
         if gt_sentences is not None:
             gt_sentences = gt_sentences.long().to(x.device)
-        
+       
+        # DSPy :
+        if self.config.get('use_dspy', False):
+            outputs = self._forward_dspy(
+                x=x,
+                output_dict=output_dict,
+            )
+            return outputs 
+
         if isinstance(x, dict):
             # If input is already tokenized? and we will want to backpropagate through it#TODO?
             batched_inputs = x
@@ -384,10 +466,7 @@ class ArchiHFTGIModule(Module):
             option_outputs_probs = []
             option_outputs_perplexities = []
             for idx in range(option_batch_size):
-                if self.openai_model:
-                    logprobs = self.forward_openai(batched_options_inputs, idx=idx)
-                else:
-                    logprobs = self.forward_hf(batched_options_inputs, idx=idx)
+                logprobs = self._forward_model(batched_options_inputs, idx=idx)
                 lsentences_likelihoods = logprobs.sum().exp().item()
                 option_outputs_probs.append(lsentences_likelihoods)
                 perplexity = torch.exp(-torch.mean(logprobs)).item()
@@ -773,6 +852,115 @@ class ArchiHFTGIModule(Module):
         return lchosen_options #spredicted_logits
  
     
+    def _forward_dspy(
+        self,
+        x,
+        output_dict,
+    ):
+        '''
+        It will use DSPy module, possibly with Structured Outputs/Grammar/JSON 
+        to extract the answer among the options and update the output_dict accordingly.
+        :param output_dict: Dict to update with results.
+        :param prompts: list of strings
+        :param options: list of list of strings
+        :return lchosen_options: (prompt_batch_size x 1)
+        ''' 
+        decoded_x = BT2STR(x.to(torch.uint8))
+        # Are there options?
+        if '[NBR_QUESTIONS]' in decoded_x[0]:
+            raise NotImplementedError
+            split_questions = True
+            prompts = [dx.split('[NBR_QUESTIONS]')[0] for dx in decoded_x]
+            nbr_questions = [int(dx.split('[NBR_QUESTIONS]')[1].split('[/NBR_QUESTIONS]')[0]) for dx in decoded_x]
+            max_nbr_options = [int(dx.split('[MAX_NBR_OPTIONS]')[1].split('[/MAX_NBR_OPTIONS]')[0]) for dx in decoded_x]
+        elif '[OPTION]' in decoded_x[0]:
+            split_options = True
+            prompts = [dx.split('[/PROMPT]')[0] for dx in decoded_x]
+            options = [dx.split('[/PROMPT]')[1].split('[OPTION]') for dx in decoded_x]
+        else:
+            raise NotImplementedError
+        
+        responses = []
+        max_option_batch_size = 0
+        for pidx, opts in enumerate(options):
+            max_option_batch_size = max(len(opts), max_option_batch_size)
+            prompt = prompts[pidx]
+            dins = self.dspy_input_formatting_fn(
+                prompt=prompt,
+                options=opts,
+            )
+            
+            responded = False
+            waiting_time = 1 #mins
+            while not responded:
+                try:
+                    response = self.dspy_module(**dins)
+                    responded = True
+                except Exception as e:
+                    responded = False
+                    print(f"ArchiHFTGIModule: exception caught in DSPy forward: {e}\n\nWaiting {waiting_time} mins, before retrying.")
+                    time.sleep(60*int(waiting_time))
+                    waiting_time *= 1.5
+            # Parse answer:
+            try:
+                douts = self.dspy_output_formatting_fn(
+                    prompt=prompt,
+                    response=response,
+                )
+                answer_id = douts['answer_id']
+                if answer_id >= max_option_batch_size:
+                    answer_id = max_option_batch_size-1
+                if answer_id < 0:
+                    answer_id = 0
+                #response = torch.tensor([answer_id] dtype=torch.long).reshape(1, 1)
+                #response = torch.clamp(response, min=0, max=max_options_batch_size-1)
+            except Exception as e:
+                self.error_count += 1
+                print(f"ArchiHFTGIModule: error {self.error_count} : DSPy prediction issue: {e}")
+                # TODO: figure out a reply mechanisms ? import ipdb; ipdb.set_trace()
+                answer_id = 0 #torch.zeros((1, 1), dtype=torch.long)
+            responses.append(answer_id)        
+        
+        lsoptions_likelihoods = torch.zeros(len(prompts), max_option_batch_size)
+        # (prompt_batch_size x max_option_batch_size)
+        lsoptions_likelihoods[range(len(prompts)), responses] = 1
+        # (prompt_batch_size x max_option_batch_size)
+
+        slhidden_states = torch.zeros(len(prompts), max_option_batch_size, self.config.get('hidden_size', 32))
+        # (prompt_batch_size x max_option_batch_size x hidden_size)
+        lsoptions_perplexities = lsoptions_likelihoods*(-1)
+        # (prompt_batch_size x max_option_batch_size)
+        
+        # Option choosing with log:
+        lsoptions_probs = lsoptions_likelihoods#.softmax(dim=-1)
+        # (prompt_batch_size x max_option_batch_size
+        if False: #TODO debug self.training:
+            #option_distribution = nn.Categorical(logits=soptions_likelihoods.prod(dim=-1))
+            # (prompt_batch_size x max_option_batch_size)
+            #chosen_option = option_distribution.sample()
+            lchosen_options = torch.multinomial(lsoptions_probs, num_samples=1) #.reshape((batch_size,))
+            # (prompt_batch_size x 1)
+        else:
+            lchosen_options = lsoptions_probs.argmax(dim=-1).unsqueeze(-1)
+            #lchosen_options = lsoptions_probs.argmin(dim=-1).unsqueeze(-1)
+            # (prompt_batch_size x 1)
+        
+        # Legal choices:
+        legal_choices = (lsoptions_probs != 0).long()
+        # (prompt_batch_size x max_option_batch_size)
+
+        if output_dict is not None:
+            output_dict['legal_choices'] = legal_choices
+            # The last token's hidden states are repeating the hidden states of the last non-padding tokens:
+            output_dict['last_token_last_hidden_states'] = slhidden_states#[:,:,-1,...]
+            output_dict['chosen_options'] = lchosen_options
+            output_dict['prediction_probs'] = lsoptions_probs
+            output_dict['prediction_perplexities'] = lsoptions_perplexities 
+            output_dict['prediction_likelihoods'] = lsoptions_likelihoods
+
+        return lchosen_options #spredicted_logits
+ 
+
     def _forward_inference(
         self,
         output_dict,

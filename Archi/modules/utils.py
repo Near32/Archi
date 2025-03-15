@@ -26,6 +26,24 @@ def load_module(module_key, module_kwargs):
     print(module)
     return module 
    
+def ride_init_(module, weight_init, bias_init, gain=1):
+    if hasattr(module, 'weight'):   weight_init(module.weight.data, gain=gain)
+    if hasattr(module, 'bias'):     bias_init(module.bias.data)
+    return module
+
+def ride_init(m, override_gain=None, **kwargs):
+    weight_init = nn.init.orthogonal
+    bias_init = lambda x: nn.init.constant_(x,0)
+    gain = nn.init.calculate_gain('relu')
+    if override_gain is not None:   gain = override_gain
+    rm = ride_init_(
+        m, 
+        weight_init, 
+        bias_init, 
+        gain,
+    )
+    return rm
+
 def layer_init(layer, w_scale=1.0, nonlinearity='relu', init_type=None):
     for name, param in layer._parameters.items():
         if param is None or param.data is None: continue

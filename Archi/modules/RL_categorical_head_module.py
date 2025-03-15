@@ -7,9 +7,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from Archi.modules.module import Module 
-from Archi.modules.utils import layer_init
+from Archi.modules.utils import layer_init, ride_init
 
 from regym.rl_algorithms.networks import NoisyLinear, EPS
+
 
 
 class DuelingLayer(nn.Module):
@@ -44,6 +45,7 @@ class RLCategoricalHeadModule(Module):
         input_stream_ids=None,
         output_stream_ids={},
         layer_init_fn=layer_init,
+        use_ride_init=False,
         use_cuda=False
     ):
 
@@ -61,15 +63,26 @@ class RLCategoricalHeadModule(Module):
         self.dueling = dueling
         self.noisy = noisy 
         self.action_logits_from_probs = action_logits_from_probs
+        self.use_ride_init = use_ride_init
+        
+        if self.use_ride_init:
+            layer_init_fn = lambda m: ride_init(m, override_gain=1.0)
 
         layer_fn = nn.Linear 
         if self.noisy:  layer_fn = NoisyLinear
         if self.dueling:
-            self.fc_critic = DuelingLayer(input_dim=self.state_dim, action_dim=self.action_dim, layer_fn=layer_fn)
+            self.fc_critic = DuelingLayer(
+                input_dim=self.state_dim, 
+                action_dim=self.action_dim, 
+                layer_fn=layer_fn,
+                layer_init_fn=layer_init_fn,
+            )
         else:
             self.fc_critic = layer_fn(self.state_dim, self.action_dim)
             if layer_init_fn is not None:
+                #TODO figure out propoer init:
                 self.fc_critic = layer_init_fn(self.fc_critic, 1e0)
+                #self.fc_critic = layer_init_fn(self.fc_critic, 1e-3)
 
         if config is not None \
         and 'mlp_nbr_layers' in config:

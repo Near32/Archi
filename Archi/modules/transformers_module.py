@@ -14,22 +14,25 @@ from Archi.modules.utils import (
     apply_on_hdict,
 )
 
-import transformers
-from transformers import (
-    pipeline,
-    AutoTokenizer,
-    AutoModelForCausalLM,
-    BitsAndBytesConfig,
-    Cache,
-    DynamicCache,
-)
-from peft import (
-    prepare_model_for_kbit_training,
-    LoraConfig,
-    get_peft_model,
-)
-from accelerate import Accelerator
-from unsloth import FastLanguageModel
+try:
+    import transformers
+    from transformers import (
+        pipeline,
+        AutoTokenizer,
+        AutoModelForCausalLM,
+        BitsAndBytesConfig,
+        Cache,
+        DynamicCache,
+    )
+    from peft import (
+        prepare_model_for_kbit_training,
+        LoraConfig,
+        get_peft_model,
+    )
+    from accelerate import Accelerator
+    from unsloth import FastLanguageModel
+except Exception as e:
+    print(e)
 
 from pydantic import BaseModel, conint
 import yaml
@@ -39,6 +42,10 @@ from Archi.utils import (
     BT2STR,
 )
 
+try:
+    import dspy
+except Exception as e:
+    print("Please install dspy, if you want to use it.")
 
 def print_trainable_parameters(model):
     """
@@ -117,6 +124,20 @@ class ArchiTransformerModule(Module):
                 **self.config['bnb_config'],
             )
         
+        if self.config.get('use_dspy', False):
+            import ipdb; ipdb.set_trace()
+            # Load DSPy model
+            self.dspy_model = dspy.HFModel(
+                model=self.model_id,
+                hf_device_map='auto',
+                model_kwargs={
+                    'quantization_config':self.quantization_config,
+                },
+            )
+            # Remove the inner model to update it later:
+            self.dspy_model.model = None
+            gc.collect()
+
         if self.config['use_unsloth']:
             self.model, self.tokenizer = FastLanguageModel.from_pretrained(
                 model_name=self.model_id,
@@ -220,6 +241,10 @@ class ArchiTransformerModule(Module):
 
         print_trainable_parameters(self.model)
         #self.pipeline = pipeline('text-generation', model=self.model, tokenizer=self.tokenizer)
+        if self.config.get('use_dspy', False):
+            # Update model:
+            self.dspy_model.model = self.model
+            dspy.settings.configure(lm=self.dspy_model)
 
     def reset(self):
         pass
