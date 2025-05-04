@@ -174,7 +174,7 @@ class FullyConnectedNetworkModule(Module):
                 product_tdims = np.prod(temporal_dims)
                 experiences = experiences.view(batch_size*product_tdims, original_shape[-1])
             
-            if self.use_cuda:   experiences = experiences.cuda()
+            experiences = experiences.to(self.layers[0].weight.device)
 
             features = self.layers(experiences)
 

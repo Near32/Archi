@@ -397,8 +397,7 @@ class ConvolutionalNetworkModule(Module):
     def _compute_feat_map(self, x):
         feat_map = x 
         if self.cnn is not None:
-            if self.use_cuda:
-                x = x.cuda()
+            x = x.to(self.cnn[0].weight.device)
             feat_map = self.cnn(x)
         return feat_map 
 
@@ -455,7 +454,7 @@ class ConvolutionalNetworkModule(Module):
                 product_tdims = np.prod(temporal_dims)
                 experiences = experiences.view(batch_size*product_tdims, *original_shape[-3:])
             
-            if self.use_cuda:   experiences = experiences.cuda()
+            experiences = experiences.to(self.cnn[0].weight.device)
 
             features = self.forward(experiences)
 

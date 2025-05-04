@@ -113,10 +113,8 @@ class LSTMModule(Module):
             elif hx.size(0) != batch_size:
                 raise NotImplementedError("Sizes of the hidden states and the inputs do not coincide.")
 
-            if self.use_cuda:
-                nhx = nhx.cuda()
-                hx = hx.cuda()
-                cx = cx.cuda()
+            hx = hx.to(nhx.device)
+            cx = cx.to(nhx.device)
 
             nhx, ncx = layer(nhx, (hx, cx))
             next_hstates.append(nhx)
@@ -324,9 +322,7 @@ class GRUModule(Module):
             elif hx.size(0) != batch_size:
                 raise NotImplementedError("Sizes of the hidden states and the inputs do not coincide.")
             
-            if self.use_cuda:
-                x = x.cuda()
-                hx = hx.cuda()
+            hx = hx.to(x.device)
 
             nhx = layer(x, hx)
             next_hstates.append(nhx)
@@ -606,7 +602,7 @@ class OracleTHERModule(Module):
                 experiences = experiences[0]
             batch_size = experiences.size(0)
 
-            if self.use_cuda:   experiences = experiences.cuda()
+            #if self.use_cuda:   experiences = experiences.cuda()
 
             # GT Sentences ?
             gt_key = f"{key}_gt_sentences"
@@ -1132,7 +1128,7 @@ class CaptionRNNModule(Module):
                 # if it is not a feature map but it has an extra dimension:
                 experiences = experiences.reshape((batch_size, -1))
 
-            if self.use_cuda:   experiences = experiences.cuda()
+            experiences = experiences.to(self.input_decoder[0].weight.device)
 
             # GT Sentences ?
             gt_key = f"{key}_gt_sentences"
@@ -1294,7 +1290,7 @@ class EmbeddingRNNModule(Module):
                 assert len(experiences)==1, f"Provided too many input on id:{key}"
                 experiences = experiences[0]
 
-            if self.use_cuda:   experiences = experiences.cuda()
+            experiences = experiences.to(self.ebmedding.weight.device)
 
             output = self.forward(x=experiences)
             outputs_stream_dict[output_key] = [output]
