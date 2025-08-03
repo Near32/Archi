@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from torch.distributions.categorical import Categorical
 
 from Archi.modules.module import Module 
-from Archi.modules.utils import layer_init
+from Archi.modules.utils import layer_init, ride_init
 
 from regym.rl_algorithms.networks import EPS
 
@@ -17,14 +17,16 @@ class RLCategoricalActorCriticHeadModule(Module):
     def __init__(
         self, 
         state_dim,   
-	action_dim,
+	    action_dim,
         use_intrinsic_critic=False,
         id='RLCategoricalActorCriticHeadModule_0', 
         config=None,
         input_stream_ids=None,
         output_stream_ids={},
         layer_init_fn=layer_init,
-        use_cuda=False
+        use_ride_init=False,
+        use_cuda=False,
+        **kwargs,
     ):
 
         super(RLCategoricalActorCriticHeadModule, self).__init__(
@@ -39,6 +41,10 @@ class RLCategoricalActorCriticHeadModule(Module):
         self.use_intrinsic_critic= use_intrinsic_critic
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.use_ride_init = use_ride_init
+
+        if self.use_ride_init:
+            layer_init_fn = lambda m, w_scale=1.0, init_type='ortho' : ride_init(m, override_gain=1.0)
 
         layer_fn = nn.Linear 
         if False : #self.dueling:
