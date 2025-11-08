@@ -27,7 +27,7 @@ def load_module(module_key, module_kwargs):
     return module 
    
 def ride_init_(module, weight_init, bias_init, gain=1):
-    if hasattr(module, 'weight'):   weight_init(module.weight.data, gain=gain)
+    if hasattr(module, 'weight'):   weight_init(module.weight.data.cuda(), gain=gain).cpu()
     if hasattr(module, 'bias'):     bias_init(module.bias.data)
     return module
 
