@@ -67,33 +67,44 @@ class RLCategoricalHeadModule(Module):
         
         if self.use_ride_init:
             layer_init_fn = lambda m: ride_init(m, override_gain=1.0)
-
-        layer_fn = nn.Linear 
-        if self.noisy:  layer_fn = NoisyLinear
-        if self.dueling:
-            self.fc_critic = DuelingLayer(
-                input_dim=self.state_dim, 
-                action_dim=self.action_dim, 
-                layer_fn=layer_fn,
-                layer_init_fn=layer_init_fn,
-            )
-        else:
-            self.fc_critic = layer_fn(self.state_dim, self.action_dim)
-            if layer_init_fn is not None:
-                #TODO figure out propoer init:
-                self.fc_critic = layer_init_fn(self.fc_critic, 1e0)
-                #self.fc_critic = layer_init_fn(self.fc_critic, 1e-3)
-
+        
+        input_dim = self.state_dim
         if config is not None \
         and 'mlp_nbr_layers' in config:
             batch_norm = config.get('with_batchnorm', False)   
             self.mlp = []
             for lidx in range(config['mlp_nbr_layers']):
-                self.mlp += [layer_init_fn( nn.Linear(self.state_dim, self.state_dim, bias=not batch_norm), 1e0)]
+                if config.get('mlp_layers_dims', None) is None:
+                    output_dim = input_dim
+                else:
+                    output_dim = config['mlp_layers_dims'][lidx]
+                self.mlp += [
+                    layer_init_fn( 
+                        nn.Linear(input_dim, output_dim, bias=not batch_norm),
+                    )
+                ]
+
+                input_dim = output_dim
                 if batch_norm:    
-                    self.mlp += [nn.BatchNorm1d(self.state_dim)]
+                    self.mlp += [nn.BatchNorm1d(output_dim)]
                 self.mlp += [nn.ReLU()]
             self.mlp = nn.Sequential(*self.mlp)
+
+        layer_fn = nn.Linear 
+        if self.noisy:  layer_fn = NoisyLinear
+        if self.dueling:
+            self.fc_critic = DuelingLayer(
+                input_dim=input_dim, 
+                action_dim=self.action_dim, 
+                layer_fn=layer_fn,
+                layer_init_fn=layer_init_fn,
+            )
+        else:
+            self.fc_critic = layer_fn(input_dim, self.action_dim)
+            if layer_init_fn is not None:
+                #TODO figure out propoer init:
+                self.fc_critic = layer_init_fn(self.fc_critic, 1e0)
+                #self.fc_critic = layer_init_fn(self.fc_critic, 1e-3)
 
         self.feature_dim = self.action_dim
 

@@ -294,6 +294,16 @@ class GRUModule(Module):
         self.non_linearities = non_linearities
         while len(self.non_linearities) < len(self.layers):
             self.non_linearities.append(self.non_linearities[-1])
+        for idx, nl in enumerate(self.non_linearities):
+            if not isinstance(nl, str):
+                raise NotImplementedError
+            if nl=='None':
+                self.non_linearities[idx] = None
+            else:
+                nl_cls = getattr(nn, nl, None)
+                if nl_cls is None:
+                    raise NotImplementedError
+                self.non_linearities[idx] = nl_cls()
         
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -315,8 +325,9 @@ class GRUModule(Module):
         niteration = [it+1 for it in iteration]
 
         next_hstates = []
+        nhx = x
         for idx, (layer, hx) in enumerate(zip(self.layers, hidden_states) ):
-            batch_size = x.size(0)
+            batch_size = nhx.size(0)
             if hx.size(0) == 1: # then we have just resetted the values, we need to expand those:
                 hx = torch.cat([hx]*batch_size, dim=0)
             elif hx.size(0) != batch_size:
@@ -324,12 +335,12 @@ class GRUModule(Module):
             
             hx = hx.to(x.device)
 
-            nhx = layer(x, hx)
+            nhx = layer(nhx, hx)
             next_hstates.append(nhx)
             # Consider not applying activation functions on last layer's output
             if self.non_linearities[idx] is not None:
                 nhx = self.non_linearities[idx](nhx)
-        return nhx, {'hidden': next_hstatesi, 'iteration': niteration}
+        return nhx, {'hidden': next_hstates, 'iteration': niteration}
 
     def compute(self, input_streams_dict:Dict[str,object]) -> Dict[str,object] :
         """
@@ -357,7 +368,7 @@ class GRUModule(Module):
             }),
         )
         
-        outputs_stream_dict[f'output'] = gru_output
+        outputs_stream_dict[f'output'] = [gru_output]
         
         outputs_stream_dict[f'hidden'] = state_dict['hidden']
         outputs_stream_dict[f'iteration'] = state_dict['iteration']
@@ -367,7 +378,7 @@ class GRUModule(Module):
                 outputs_stream_dict[self.output_stream_ids[k]] = outputs_stream_dict[k]
 
         # Bookkeeping:
-        outputs_stream_dict[f'inputs:{self.id}:output'] = gru_output
+        outputs_stream_dict[f'inputs:{self.id}:output'] = [gru_output]
         outputs_stream_dict[f'inputs:{self.id}:hidden'] = state_dict['hidden']
         outputs_stream_dict[f'inputs:{self.id}:iteration'] = state_dict['iteration']
 
