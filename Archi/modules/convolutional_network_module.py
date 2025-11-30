@@ -258,6 +258,7 @@ class ConvolutionalNetworkModule(Module):
             self.feature_dim = feature_dim[-1]
         
         self.cnn = []
+        self.input_shape = input_shape
         dim = input_shape[1] # height
         in_ch = input_shape[0]
         for idx, (cfg, k, s, p) in enumerate(zip(channels, kernel_sizes, strides, paddings)):
@@ -351,8 +352,9 @@ class ConvolutionalNetworkModule(Module):
         else:
             hidden_units = [dim * dim * channels[-1]]+hidden_units
 
-        if isinstance(feature_dim, int):
-            hidden_units = hidden_units + [feature_dim]
+        if isinstance(feature_dim, int) \
+        and feature_dim != -1:
+                hidden_units = hidden_units + [feature_dim]
         else:
             hidden_units = hidden_units + feature_dim
         
@@ -381,6 +383,7 @@ class ConvolutionalNetworkModule(Module):
                     self.fcs.append(self.non_linearities[lidx]())
                 if self.dropout:
                     self.fcs.append( nn.Dropout(p=self.dropout))
+                self.feature_dim = nbr_out
             self.fcs = nn.Sequential(*self.fcs)
         else:
             self.feature_dim = (self.feat_map_dim**2)*self.feat_map_depth
