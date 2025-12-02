@@ -355,7 +355,8 @@ class ConvolutionalNetworkModule(Module):
         if isinstance(feature_dim, int) \
         and feature_dim != -1:
                 hidden_units = hidden_units + [feature_dim]
-        else:
+        elif fc_hidden_units != [] \
+        and isinstance(feature_dim, list):
             hidden_units = hidden_units + feature_dim
         
         if feature_dim != -1 or fc_hidden_units != []:
